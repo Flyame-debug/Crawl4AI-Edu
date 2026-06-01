@@ -1,5 +1,10 @@
-from django.db import models
-
+"""
+功能：定义数据库表结构（数据模型）
+用途：告诉 Django 数据库里要存什么数据
+- PageSnapshot：网页快照表，存爬取后的 Markdown 内容
+- SeedURL：种子 URL 表，存要爬取的网站地址列表
+调用方：Django 自动调用，用于创建数据库表
+"""
 # Create your models here.
 from django.db import models
 

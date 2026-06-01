@@ -1,3 +1,12 @@
+"""
+功能：Django 总路由配置
+用途：把所有 URL 请求分发给对应的应用
+- /admin/ -> 后台管理
+- /api/ -> API 路由（包含 pages、seeds）
+- /api/stats/ -> 统计路由
+调用方：Django 启动时自动加载
+"""
+
 from django.contrib import admin
 from django.urls import path, include
 from django.http import HttpResponse

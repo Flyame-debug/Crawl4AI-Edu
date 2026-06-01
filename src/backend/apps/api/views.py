@@ -1,3 +1,12 @@
+"""
+功能：API 视图（业务逻辑）
+用途：处理前端和爬虫发来的 HTTP 请求
+- GET /api/pages/ - 获取网页快照列表
+- POST /api/pages/ - 新增网页快照
+- GET /api/seeds/ - 获取种子URL列表
+- POST /api/seeds/ - 新增种子URL
+调用方：被 urls.py 路由调用
+"""
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,7 +16,10 @@ from .serializers import PageSnapshotSerializer, SeedURLSerializer
 
 
 class PageSnapshotViewSet(viewsets.ModelViewSet):
-    """网页快照 API"""
+    """
+    网页快照 API
+    提供：列表、详情、创建、更新、删除、按分类筛选、搜索
+    """
     queryset = PageSnapshot.objects.all().order_by('-created_at')
     serializer_class = PageSnapshotSerializer
     
@@ -50,7 +62,10 @@ class PageSnapshotViewSet(viewsets.ModelViewSet):
 
 
 class SeedURLViewSet(viewsets.ModelViewSet):
-    """种子URL API"""
+    """
+    种子URL API
+    提供：列表、详情、创建、更新、删除、按学校筛选、按状态筛选
+    """
     queryset = SeedURL.objects.all().order_by('-created_at')
     serializer_class = SeedURLSerializer
     
@@ -85,3 +100,5 @@ class SeedURLViewSet(viewsets.ModelViewSet):
             seed.status = 'failed'
             seed.save()
             return Response({'status': 'dead', 'error': str(e)})
+        
+        
