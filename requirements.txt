@@ -1,17 +1,36 @@
+# ============================================
+# 基础 / 通用
+# ===========================================
+python-dotenv==1.0.0
+pytest==8.2.0
+black==24.4.2
+
+# ============================================
+# Django 全家桶 (成员 C 主导，全员共用)
+# ===========================================
+Django==5.2.14
+djangorestframework==3.17.1
+psycopg2-binary==2.9.12
+django-celery-results==2.5.1    # 需要安装
+django-cors-headers==4.9.0
+
+# ============================================
+# 异步与爬虫引擎 (成员 A)
+# ===========================================
+aiohttp==3.9.5
+fake-useragent==1.5.1
+playwright==1.44.0
+scrapy==2.11.2          # 仅用到 LinkExtractor，不用全框架
+pybloom-live==4.0.0
+redis==5.0.4
+celery==5.3.6
+flower==2.0.1
+minio==7.2.7
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
+# ============================================
+# 工具 / 辅助
+# ===========================================
 crawl4ai==0.8.6
-requests
-beautifulsoup4
-lxml
-django
-djangorestframework
-psycopg2
-sqlalchemy
-langchain
-faiss-cpu
-openai
-pandas
-numpy
-scikit-learn
-python-dotenv
-pytest
-black
