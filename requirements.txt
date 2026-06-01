@@ -1,0 +1,17 @@
+crawl4ai==0.8.6
+requests
+beautifulsoup4
+lxml
+django
+djangorestframework
+psycopg2
+sqlalchemy
+langchain
+faiss-cpu
+openai
+pandas
+numpy
+scikit-learn
+python-dotenv
+pytest
+black
