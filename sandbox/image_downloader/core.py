@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
@@ -15,6 +16,18 @@ from sandbox.image_downloader.utils import infer_extension
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
+
+# ---------------------------------------------------------------------------
+# Logger — configured once with a console StreamHandler.
+# ---------------------------------------------------------------------------
+_logger: logging.Logger = logging.getLogger("image_downloader")
+if not _logger.handlers:
+    _handler: logging.StreamHandler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    _logger.addHandler(_handler)
+    _logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Fallback User-Agent list — used when the shared ua_pool is unavailable.
@@ -33,6 +46,9 @@ _FALLBACK_UAS: list[str] = [
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
 ]
+
+# HTTP status codes that should *not* trigger a retry (client errors).
+_NO_RETRY_STATUSES: frozenset[int] = frozenset({400, 401, 403, 404, 405, 410})
 
 
 # ===================================================================
@@ -69,9 +85,17 @@ async def download_images(
     # -- 1. Extract & deduplicate absolute image URLs -------------------------
     raw_urls: list[str] = _extract_image_urls(html, base_url)
     if not raw_urls:
+        _logger.info("No <img> URLs found in HTML — nothing to download.")
         return {}
 
     unique_urls: list[str] = list(dict.fromkeys(raw_urls))  # order-preserving dedup
+    dedup_skipped: int = len(raw_urls) - len(unique_urls)
+    _logger.info(
+        "Extracted %d image URL(s) from HTML (%d unique, %d duplicate(s) skipped).",
+        len(raw_urls),
+        len(unique_urls),
+        dedup_skipped,
+    )
 
     # -- 2. Prepare output directory ------------------------------------------
     output_path: Path = Path(output_dir).resolve()
@@ -92,6 +116,8 @@ async def download_images(
     semaphore: asyncio.Semaphore = asyncio.Semaphore(concurrency)
     timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=10)
 
+    _logger.info("Starting download of %d image(s) (concurrency=%d).", len(unique_urls), concurrency)
+
     async with aiohttp.ClientSession(timeout=timeout) as session:
         tasks: list[Coroutine] = [
             _download_single(session, semaphore, url, output_path, dict(headers))
@@ -101,10 +127,20 @@ async def download_images(
 
     # -- 5. Build result mapping ----------------------------------------------
     unique_map: dict[str, str] = {}
+    success_count: int = 0
     for entry in results:
         if entry is not None:
             abs_url, local_path = entry
             unique_map[abs_url] = local_path
+            success_count += 1
+            _logger.info("Downloaded: %s → %s", abs_url, local_path)
+
+    failed_count: int = len(unique_urls) - success_count
+    _logger.info(
+        "Download complete: %d succeeded, %d failed.",
+        success_count,
+        failed_count,
+    )
 
     url_to_path: dict[str, str] = {}
     for raw_url in raw_urls:
@@ -135,6 +171,7 @@ def _extract_image_urls(html: str, base_url: str) -> list[str]:
             continue
         src = src.strip()
         if not src or src.startswith(("data:", "javascript:")):
+            _logger.debug("Skipping non-downloadable src: %s", src[:80])
             continue
         absolute_url: str = urljoin(base_url, src)
         urls.append(absolute_url)
@@ -149,30 +186,94 @@ async def _download_single(
     output_path: Path,
     headers: dict[str, str],
 ) -> tuple[str, str] | None:
-    """Download one image and persist it to *output_path*.
+    """Download one image with up to 2 retries (exponential backoff).
 
-    Returns ``(absolute_url, local_path)`` on success or ``None`` when the
-    download fails or the HTTP status is not 200.
+    Retry policy
+    ------------
+    * Connection errors, timeouts, and HTTP 5xx → retry (max 2).
+    * HTTP 4xx (403, 404, …) → no retry, skip immediately.
+    * Backoff: 1 s before first retry, 2 s before second retry.
+
+    Each attempt acquires the *semaphore* so concurrency limits are honoured
+    across retries.
     """
-    async with semaphore:
-        try:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    return None
+    max_retries: int = 2
+    retry_delays: tuple[float, ...] = (1.0, 2.0)
 
-                body: bytes = await response.read()
-                content_type: str | None = response.headers.get("Content-Type")
+    for attempt in range(max_retries + 1):
+        async with semaphore:
+            try:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        body: bytes = await response.read()
+                        content_type: str | None = response.headers.get("Content-Type")
+                        content_disposition: str | None = response.headers.get(
+                            "Content-Disposition"
+                        )
 
-            ext: str = infer_extension(url, content_type)
-            filename: str = f"{hashlib.md5(url.encode()).hexdigest()}{ext}"
-            filepath: Path = output_path / filename
+                        ext: str = infer_extension(
+                            url, content_type, content_disposition=content_disposition
+                        )
+                        filename: str = (
+                            f"{hashlib.md5(url.encode()).hexdigest()}{ext}"
+                        )
+                        filepath: Path = output_path / filename
 
-            filepath.write_bytes(body)
-            return (url, str(filepath))
+                        filepath.write_bytes(body)
+                        return (url, str(filepath))
 
-        except Exception:
-            # Network errors, timeouts, decode failures — skip gracefully.
-            return None
+                    # -- Non-200 status ----------------------------------------
+                    status: int = response.status
+                    if status in _NO_RETRY_STATUSES:
+                        _logger.warning(
+                            "HTTP %d for %s — client error, skipping.", status, url
+                        )
+                        return None
+
+                    if status >= 500:
+                        _logger.warning(
+                            "HTTP %d (server error) for %s (attempt %d/%d).",
+                            status,
+                            url,
+                            attempt + 1,
+                            max_retries + 1,
+                        )
+                    else:
+                        _logger.warning(
+                            "Unexpected HTTP %d for %s — skipping.", status, url
+                        )
+                        return None
+
+            except (
+                aiohttp.ClientConnectionError,
+                asyncio.TimeoutError,
+            ) as exc:
+                _logger.warning(
+                    "Network error for %s: %s (attempt %d/%d).",
+                    url,
+                    exc,
+                    attempt + 1,
+                    max_retries + 1,
+                )
+            except OSError as exc:
+                _logger.error(
+                    "File-system error writing %s: %s.", url, exc
+                )
+                return None
+            except Exception as exc:
+                _logger.error(
+                    "Unexpected error for %s: %s — skipping.", url, exc
+                )
+                return None
+
+        # -- Backoff before next retry ----------------------------------------
+        if attempt < max_retries:
+            delay: float = retry_delays[attempt]
+            _logger.info("Retrying %s in %.1fs …", url, delay)
+            await asyncio.sleep(delay)
+
+    _logger.error("All %d attempt(s) exhausted for %s — giving up.", max_retries + 1, url)
+    return None
 
 
 # ===================================================================
@@ -203,9 +304,9 @@ if __name__ == "__main__":
     )
 
     async def _main() -> None:
-        print("=" * 60)
-        print("Image Downloader — Smoke Test")
-        print("=" * 60)
+        _logger.info("=" * 60)
+        _logger.info("Image Downloader — Smoke Test")
+        _logger.info("=" * 60)
 
         result: dict[str, str] = await download_images(
             html=TEST_HTML,
@@ -218,21 +319,21 @@ if __name__ == "__main__":
         failed: int = len(
             set(_extract_image_urls(TEST_HTML, "https://example.com"))
         ) - success
-        print(f"\nSuccessfully downloaded: {success} unique image(s)")
-        print(f"Failed / skipped:       {failed}")
-        print(f"Total src entries:      {len(result)}")
-        print(f"\nFirst {min(3, len(result))} mapping entries:")
+        _logger.info("Successfully downloaded: %d unique image(s)", success)
+        _logger.info("Failed / skipped:       %d", failed)
+        _logger.info("Total src entries:      %d", len(result))
+        _logger.info("First %d mapping entries:", min(3, len(result)))
         for i, (url, path) in enumerate(result.items()):
             if i >= 3:
                 break
-            print(f"  {url}")
-            print(f"    → {path}")
+            _logger.info("  %s", url)
+            _logger.info("    → %s", path)
             exists: str = "✓" if os.path.isfile(path) else "✗ MISSING"
-            print(f"    file exists: {exists}")
+            _logger.info("    file exists: %s", exists)
 
         # Quick assertion
         for _, p in result.items():
             assert os.path.isfile(p), f"File not found: {p}"
-        print("\n✅ All assertions passed — files written to disk.")
+        _logger.info("All assertions passed — files written to disk.")
 
     asyncio.run(_main())
