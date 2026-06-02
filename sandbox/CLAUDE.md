@@ -29,3 +29,4 @@
 ## 注意
 - 所有代码仅用于沙箱验证，无需集成后端
 - 后续会被组装到 `standalone_crawler.py`
+- 所有任务请在conda环境crawlai-edu中进行
