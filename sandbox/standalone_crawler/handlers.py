@@ -31,6 +31,8 @@ async def process_page(
     current_depth: int,
     output_dirs: dict[str, str],
     bloom_filter: Any,
+    allowed_domains: list[str] | None = None,
+    white_list_patterns: list[str] | None = None,
 ) -> dict:
     """Process a single page: fetch → save HTML → download images → extract links.
 
@@ -39,12 +41,18 @@ async def process_page(
         current_depth: BFS depth of this page (0 = seed).
         output_dirs: ``{"html": "/path/to/html", "images": "/path/to/images"}``.
         bloom_filter: Object with ``add(url)`` and ``contains(url)`` methods.
+        allowed_domains: Optional domain whitelist for link extraction.
+            ``None`` or ``[]`` means allow all domains.
+        white_list_patterns: Optional URL-path regex whitelist for link
+            extraction.  ``None`` or ``[]`` means allow all patterns.
 
     Returns:
         A dict with keys ``success``, ``url``, ``depth``, ``html_path``,
         ``images`` (dict), ``links`` (list of new, unvisited URLs), and
         ``error`` (str or None).
     """
+    _domains = allowed_domains if allowed_domains is not None else []
+    _patterns = white_list_patterns if white_list_patterns is not None else []
     result: dict[str, Any] = {
         "success": False,
         "url": url,
@@ -90,7 +98,7 @@ async def process_page(
 
     # 4. Extract & filter links ------------------------------------------------
     try:
-        raw_links: list[str] = extract_links(html, url, allowed_domains=[], white_list_patterns=[])
+        raw_links: list[str] = extract_links(html, url, allowed_domains=_domains, white_list_patterns=_patterns)
     except Exception as exc:
         logger.warning("Link extraction failed for %s: %s", url, exc)
         raw_links = []

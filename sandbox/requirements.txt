@@ -1,0 +1,29 @@
+# ============================================
+# 成员 A（爬虫与异步任务）沙箱依赖
+# ============================================
+# 安装方式：
+#   conda activate crawlai-edu
+#   pip install -r sandbox/requirements.txt
+# ============================================
+
+# --- 异步 HTTP 客户端（fetcher / image_downloader / dead_link_checker）---
+aiohttp>=3.11.11,<4.0
+
+# --- 无头浏览器渲染（fetcher — 可选，仅 use_render=True 时）
+playwright>=1.49.0
+
+# --- 链接提取（link）---
+scrapy==2.11.2
+
+# --- 布隆过滤器去重（link）---
+pybloom-live==4.0.0
+
+# --- 布隆过滤器 Redis 后端（link — 可选，仅 backend="redis" 时）---
+redis==5.0.4
+
+# --- HTML / XML 解析（image_downloader）---
+beautifulsoup4==4.12.3
+
+# --- 测试 ---
+pytest>=8.4
+pytest-asyncio>=1.0

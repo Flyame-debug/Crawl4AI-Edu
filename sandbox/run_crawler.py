@@ -29,18 +29,22 @@ def _setup_path() -> None:
     os.chdir(project_root)
 
 
-def _parse_args() -> tuple[str, int]:
-    """Extract seed URL and max depth from command-line arguments.
+def _parse_args() -> tuple[str, int, str | None]:
+    """Extract seed URL, max depth, and optional config path from CLI.
+
+    Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]
 
     Returns:
-        (seed_url, max_depth) tuple.
+        (seed_url, max_depth, config_path) tuple.  config_path is None when
+        not provided; the crawler then falls back to its built-in default.
     """
     if len(sys.argv) < 2:
-        print("Usage: python sandbox/run_crawler.py <seed_url> [max_depth]")
-        print("Example: python sandbox/run_crawler.py https://httpbin.org/html 2")
+        print("Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]")
+        print("Example: python sandbox/run_crawler.py https://example.com 2 sandbox/crawler_config.json")
         sys.exit(1)
 
     seed_url: str = sys.argv[1]
+
     max_depth: int = 2
     if len(sys.argv) >= 3:
         try:
@@ -50,17 +54,27 @@ def _parse_args() -> tuple[str, int]:
         if max_depth < 1:
             print("max_depth must be ≥ 1 — using 1.")
             max_depth = 1
-    return seed_url, max_depth
+
+    config_path: str | None = None
+    if len(sys.argv) >= 4:
+        config_path = sys.argv[3]
+    return seed_url, max_depth, config_path
 
 
 async def _main() -> None:
     _setup_path()
-    seed_url, max_depth = _parse_args()
+    seed_url, max_depth, config_path = _parse_args()
 
     from standalone_crawler import crawl
 
     print(f"Starting crawl: seed={seed_url} max_depth={max_depth}")
-    stats = await crawl(seed_url=seed_url, max_depth=max_depth)
+    if config_path:
+        print(f"Config: {config_path}")
+    stats = await crawl(
+        seed_url=seed_url,
+        max_depth=max_depth,
+        config_path=config_path,
+    )
     print(stats.report())
 
 
