@@ -27,7 +27,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-
+*.exe
 # 打包文件
 build/
 develop-eggs/

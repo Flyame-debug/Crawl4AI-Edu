@@ -1,11 +1,10 @@
 """Single-page processing handler.
 
-Fetches HTML, saves it, downloads images, and extracts new outgoing links.
+Fetches HTML, extracts links, and sends data directly to backend API.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,47 +17,86 @@ for _p in (_sandbox, _project_root):
         sys.path.insert(0, _p)
 
 from fetcher import FetchError, async_fetch
-from image_downloader import download_images
 from link import extract_links
 
-from .utils import get_logger, normalize_url, url_to_filename
+from .utils import get_logger, normalize_url
 
 logger = get_logger("standalone_crawler.handlers")
+
+# 导入 requests 用于回调后端 API
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    logger.warning("requests 库未安装，无法回调后端 API")
+
+
+async def send_to_backend(url: str, html: str, backend_url: str = None) -> dict:
+    """将抓取的页面数据直接发送到 Django 后端 API"""
+    if not REQUESTS_AVAILABLE:
+        return {"success": False, "error": "requests not available"}
+    
+    if backend_url is None:
+        backend_url = "http://127.0.0.1:8000"
+    
+    api_endpoint = f"{backend_url}/api/pagesnapshot/"
+    
+    data = {
+        "url": url,
+        "markdown": html,  # 暂时用 HTML，后续可由成员B转换为 Markdown
+        "category": None,  # 后端会自动分类
+    }
+    
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.post(api_endpoint, json=data, timeout=10)
+        )
+        
+        if response.status_code in [200, 201]:
+            result = response.json()
+            logger.info("数据已入库: %s (action=%s)", url, result.get('action', 'unknown'))
+            return {"success": True, "data": result}
+        else:
+            logger.warning("入库失败: %s, status=%s", url, response.status_code)
+            return {"success": False, "error": f"HTTP {response.status_code}"}
+            
+    except Exception as e:
+        logger.error("回调后端 API 异常: %s - %s", url, str(e))
+        return {"success": False, "error": str(e)}
 
 
 async def process_page(
     url: str,
     current_depth: int,
-    output_dirs: dict[str, str],
     bloom_filter: Any,
     allowed_domains: list[str] | None = None,
     white_list_patterns: list[str] | None = None,
+    backend_url: str = None,
 ) -> dict:
-    """Process a single page: fetch → save HTML → download images → extract links.
+    """Process a single page: fetch → send to backend → extract links.
 
     Args:
         url: Absolute URL of the page to process.
         current_depth: BFS depth of this page (0 = seed).
-        output_dirs: ``{"html": "/path/to/html", "images": "/path/to/images"}``.
         bloom_filter: Object with ``add(url)`` and ``contains(url)`` methods.
         allowed_domains: Optional domain whitelist for link extraction.
-            ``None`` or ``[]`` means allow all domains.
-        white_list_patterns: Optional URL-path regex whitelist for link
-            extraction.  ``None`` or ``[]`` means allow all patterns.
+        white_list_patterns: Optional URL-path regex whitelist.
+        backend_url: Backend API URL for storing data.
 
     Returns:
-        A dict with keys ``success``, ``url``, ``depth``, ``html_path``,
-        ``images`` (dict), ``links`` (list of new, unvisited URLs), and
-        ``error`` (str or None).
+        A dict with keys ``success``, ``url``, ``depth``, ``links``, and ``error``.
     """
     _domains = allowed_domains if allowed_domains is not None else []
     _patterns = white_list_patterns if white_list_patterns is not None else []
+    
     result: dict[str, Any] = {
         "success": False,
         "url": url,
         "depth": current_depth,
-        "html_path": None,
-        "images": {},
         "links": [],
         "error": None,
     }
@@ -75,28 +113,13 @@ async def process_page(
         logger.error("Unexpected error fetching %s: %s", url, exc)
         return result
 
-    # 2. Save HTML -------------------------------------------------------------
-    try:
-        filename: str = url_to_filename(url) + ".html"
-        html_path: str = os.path.join(output_dirs["html"], filename)
-        with open(html_path, "w", encoding="utf-8") as fh:
-            fh.write(html)
-        result["html_path"] = html_path
-        logger.info("HTML saved: %s → %s", url, html_path)
-    except OSError as exc:
-        result["error"] = f"Failed to save HTML: {exc}"
-        logger.error("Save HTML failed for %s: %s", url, exc)
-        return result
+    # 2. 直接发送到后端 API（不保存本地文件）------------------------------------
+    callback_result = await send_to_backend(url, html, backend_url)
+    if not callback_result.get("success"):
+        logger.warning("数据未入库: %s, %s", url, callback_result.get("error"))
+        # 注意：即使入库失败，仍然继续提取链接
 
-    # 3. Download images -------------------------------------------------------
-    try:
-        result["images"] = await download_images(
-            html, url, output_dir=output_dirs["images"]
-        )
-    except Exception as exc:
-        logger.warning("Image download failed for %s: %s — continuing", url, exc)
-
-    # 4. Extract & filter links ------------------------------------------------
+    # 3. Extract & filter links ------------------------------------------------
     try:
         raw_links: list[str] = extract_links(html, url, allowed_domains=_domains, white_list_patterns=_patterns)
     except Exception as exc:
@@ -117,11 +140,9 @@ async def process_page(
     result["links"] = new_links
     result["success"] = True
     logger.info(
-        "Page processed: %s depth=%d html_ok=%s images=%d links=%d",
+        "Page processed: %s depth=%d links=%d",
         url,
         current_depth,
-        result["html_path"] is not None,
-        len(result["images"]),
         len(new_links),
     )
     return result
@@ -129,34 +150,22 @@ async def process_page(
 
 if __name__ == "__main__":
     import asyncio
-
     from link import create_bloom_filter
 
-    from .utils import ensure_dir
-
     async def _test() -> None:
-        test_dir = os.path.join(os.path.dirname(__file__), "_test_handler")
-        html_dir = os.path.join(test_dir, "html")
-        img_dir = os.path.join(test_dir, "images")
-        ensure_dir(html_dir)
-        ensure_dir(img_dir)
-
         bf = create_bloom_filter("memory")
         bf.add("https://httpbin.org/html")
 
         result = await process_page(
             "https://httpbin.org/html",
             0,
-            {"html": html_dir, "images": img_dir},
             bf,
+            backend_url="http://127.0.0.1:8000",
         )
-        print("\nResult keys:", list(result.keys()))
-        print("success:", result["success"])
-        print("html_path:", result["html_path"])
-        print("images count:", len(result["images"]))
-        print("links count:", len(result["links"]))
-        if result["success"]:
-            assert result["html_path"] and os.path.isfile(result["html_path"])
-            print("handler smoke test passed.")
+        print("\nResult:")
+        print(f"  success: {result['success']}")
+        print(f"  url: {result['url']}")
+        print(f"  links count: {len(result['links'])}")
+        print(f"  error: {result['error']}")
 
     asyncio.run(_test())
