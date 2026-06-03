@@ -10,7 +10,6 @@
 from django.contrib import admin
 from django.urls import path, include
 
-from apps.api.admin import admin_site
 
 # 修改 admin 头部标题
 admin.site.site_header = 'Crawl4AI 管理后台'
@@ -18,7 +17,7 @@ admin.site.site_title = 'Crawl4AI'
 admin.site.index_title = '欢迎使用 Crawl4AI 教育采集系统'
 
 urlpatterns = [
-    path('admin/', admin_site.urls),
+    path('admin/', admin.site.urls),
     path('api/', include('apps.api.urls')),      # API 路由
     path('stats/', include('apps.stats.urls')),  # 统计路由（与 api 同级）
 ]
