@@ -6,6 +6,7 @@
 - CrawlerConfig：爬虫伦理配置表（新增）
 调用方：Django 自动调用，用于创建数据库表
 """
+import uuid
 
 from django.db import models
 
@@ -82,3 +83,38 @@ class CrawlerConfig(models.Model):
     
     def __str__(self):
         return f"{self.key} = {self.value}"
+    
+    
+# apps/api/models.py 中添加
+
+class CrawlTask(models.Model):
+    """爬虫任务模型 - 存储爬虫任务状态"""
+    
+    STATUS_CHOICES = [
+        ('pending', '等待中'),
+        ('running', '运行中'),
+        ('completed', '已完成'),
+        ('failed', '失败'),
+    ]
+    
+    task_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, verbose_name="任务ID")
+    seed_url = models.URLField(verbose_name="种子URL")
+    max_depth = models.IntegerField(default=2, verbose_name="最大深度")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="状态")
+    total_pages = models.IntegerField(default=0, verbose_name="总页面数")
+    success_pages = models.IntegerField(default=0, verbose_name="成功页面数")
+    failed_pages = models.IntegerField(default=0, verbose_name="失败页面数")
+    error_message = models.TextField(blank=True, null=True, verbose_name="错误信息")
+    traceback = models.TextField(blank=True, null=True, verbose_name="错误堆栈")
+    report = models.TextField(blank=True, null=True, verbose_name="爬虫报告")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+    
+    class Meta:
+        db_table = 'crawl_tasks'
+        verbose_name = '爬虫任务'
+        verbose_name_plural = '爬虫任务'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.task_id} - {self.status}"

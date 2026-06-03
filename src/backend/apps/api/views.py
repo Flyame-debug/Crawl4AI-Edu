@@ -7,7 +7,8 @@
 - POST /api/seeds/ - 新增种子URL
 调用方：被 urls.py 路由调用
 """
-
+import os
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view  # 添加 api_view
 from rest_framework.response import Response
@@ -331,3 +332,204 @@ def update_crawler_config(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+        
+# ========== 爬虫任务控制 API（与成员A集成） ==========
+# apps/api/views.py 中修改
+
+import uuid
+import threading
+import sys
+import traceback
+from pathlib import Path
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from django.db import transaction
+
+# 导入模型
+from .models import CrawlTask
+
+# 获取项目根目录
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# 确保 sandbox 可导入
+sandbox_path = PROJECT_ROOT / "sandbox"
+if str(sandbox_path) not in sys.path:
+    sys.path.insert(0, str(sandbox_path))
+
+
+def run_async_crawl(task_id, seed_url, max_depth, config):
+    """在独立线程中运行异步爬虫"""
+    import sys
+    import os
+    from pathlib import Path
+    
+    # ========== 关键修复：设置正确的 Python 路径 ==========
+    # 当前文件: E:\Crawl4AI\src\backend\apps\api\views.py
+    # 需要回到项目根目录: E:\Crawl4AI
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent.parent.parent  # E:\Crawl4AI
+    
+    # 添加项目根目录到 sys.path
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
+    # 添加 sandbox 目录
+    sandbox_path = project_root / "sandbox"
+    if str(sandbox_path) not in sys.path:
+        sys.path.insert(0, str(sandbox_path))
+    
+    # 添加 backend 目录（Django 项目根）
+    backend_path = project_root / "src" / "backend"
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+    
+    # 设置 Django 环境变量
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
+    
+    # 打印调试信息（可以在 Django 终端看到）
+    print(f"[爬虫线程] 项目根目录: {project_root}")
+    print(f"[爬虫线程] sandbox 路径: {sandbox_path}")
+    print(f"[爬虫线程] sys.path 中包含: {[p for p in sys.path if 'Crawl4AI' in p]}")
+    
+    try:
+        # 延迟导入 Django 相关模块
+        import django
+        django.setup()
+        
+        from django.utils import timezone
+        from apps.api.models import CrawlTask
+        
+        # 更新状态为运行中
+        CrawlTask.objects.filter(task_id=task_id).update(status='running')
+        
+        # 导入爬虫模块
+        from sandbox.standalone_crawler import crawl as run_crawl
+        import asyncio
+        
+        # 运行爬虫
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        stats = loop.run_until_complete(run_crawl(
+            seed_url=seed_url,
+            max_depth=max_depth,
+            max_concurrent=config.get('max_concurrent', 5),
+            request_delay=config.get('request_delay', 1.0),
+            allowed_domains=config.get('allowed_domains', []),
+            white_list_patterns=config.get('white_list_patterns', []),
+            enable_dead_check=config.get('enable_dead_check', False),
+        ))
+        loop.close()
+        
+        # 更新任务状态为完成
+        CrawlTask.objects.filter(task_id=task_id).update(
+            status='completed',
+            total_pages=stats.total,
+            success_pages=stats.success,
+            failed_pages=stats.failed,
+            report=stats.report(),
+            updated_at=timezone.now()
+        )
+        print(f"[爬虫线程] 任务完成: {task_id}, 成功: {stats.success}/{stats.total}")
+        
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        
+        print(f"[爬虫线程] 任务失败: {task_id}")
+        print(error_trace)
+        
+        # 更新任务状态为失败
+        try:
+            from apps.api.models import CrawlTask
+            CrawlTask.objects.filter(task_id=task_id).update(
+                status='failed',
+                error_message=error_msg,
+                traceback=error_trace
+            )
+        except Exception as db_err:
+            print(f"更新任务状态失败: {db_err}")
+            
+            
+@api_view(['POST'])
+def start_crawl(request):
+    """启动爬虫任务 API - 使用数据库存储"""
+    try:
+        seed_url = request.data.get('seed_url')
+        if not seed_url:
+            return Response({'error': 'seed_url is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        max_depth = request.data.get('max_depth', 2)
+        config = request.data.get('config', {})
+        
+        # 创建数据库记录
+        task = CrawlTask.objects.create(
+            seed_url=seed_url,
+            max_depth=max_depth,
+            status='pending'
+        )
+        
+        task_id = str(task.task_id)
+        
+        # 启动后台线程
+        thread = threading.Thread(
+            target=run_async_crawl,
+            args=(task_id, seed_url, max_depth, config),
+            daemon=True
+        )
+        thread.start()
+        
+        return Response({
+            'task_id': task_id,
+            'message': 'Crawl task started successfully.',
+            'status_url': f'/api/crawl/status/{task_id}/',
+            'created_at': task.created_at
+        })
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def get_crawl_status(request, task_id):
+    """查询爬虫任务状态 - 从数据库读取"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        return Response({
+            'task_id': str(task.task_id),
+            'status': task.status,
+            'seed_url': task.seed_url,
+            'max_depth': task.max_depth,
+            'total_pages': task.total_pages,
+            'success_pages': task.success_pages,
+            'failed_pages': task.failed_pages,
+            'error_message': task.error_message,
+            'report': task.report,
+            'created_at': task.created_at,
+            'updated_at': task.updated_at,
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'status': 'not_found', 'task_id': task_id}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+def list_crawl_tasks(request):
+    """列出所有爬虫任务"""
+    tasks = CrawlTask.objects.all().order_by('-created_at')[:50]
+    return Response({
+        'total': CrawlTask.objects.count(),
+        'tasks': [
+            {
+                'task_id': str(t.task_id),
+                'status': t.status,
+                'seed_url': t.seed_url,
+                'total_pages': t.total_pages,
+                'success_pages': t.success_pages,
+                'created_at': t.created_at,
+            }
+            for t in tasks
+        ]
+    })

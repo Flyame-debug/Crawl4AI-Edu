@@ -32,4 +32,11 @@ urlpatterns = [
     # ========== 爬虫配置 API ==========
     path('crawler/config/', views.get_crawler_config, name='crawler_config'),
     path('crawler/config/update/', views.update_crawler_config, name='update_crawler_config'),
+    
+    # ========== 爬虫任务控制 API（与成员A集成） ==========
+    path('crawl/start/', views.start_crawl, name='start_crawl'),
+    path('crawl/status/<str:task_id>/', views.get_crawl_status, name='crawl_status'),
+    
+    # ========== 爬虫任务后端显示 ==========
+    path('crawl/tasks/', views.list_crawl_tasks, name='list_crawl_tasks'),
 ]

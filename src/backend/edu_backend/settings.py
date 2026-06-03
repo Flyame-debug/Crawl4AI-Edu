@@ -10,7 +10,7 @@
 - CRAWLER_ETHICS：爬虫伦理配置（模块8.5）
 调用方：Django 启动时自动加载
 """
-
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'
@@ -20,6 +20,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-ayxz2eruip8db=x!h7nnn-5+r*@$t%u7vz@7hmn%a-p^yd#y*v"
 DEBUG = True
 ALLOWED_HOSTS = []
+
+# 添加项目根目录（包含 sandbox 的目录）
+PROJECT_ROOT = BASE_DIR.parent.parent.parent  # E:\Crawl4AI
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(BASE_DIR))  # 添加 src/backend 到路径
+
 
 # Application definition
 INSTALLED_APPS = [
@@ -51,14 +57,15 @@ ROOT_URLCONF = "edu_backend.urls"
 
 TEMPLATES = [
     {
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
-        "APP_DIRS": True,
-        "OPTIONS": {
-            "context_processors": [
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [BASE_DIR / 'templates'],  # 添加模板目录
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -117,14 +124,13 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 20,
 }
 
-# MinIO 配置
-MINIO_CONFIG = {
-    'endpoint': 'localhost:9000',
-    'access_key': 'admin123',
-    'secret_key': 'admin123456',
-    'bucket_name': 'crawl4ai-images',
-    'secure': False,
-}
+
+# MinIO配置样例
+#192.168.138.1
+MINIO_ENDPOINT = "127.0.0.1:9000"
+MINIO_ACCESS_KEY = "minioadmin"
+MINIO_SECRET_KEY = "minioadmin"
+MINIO_SECURE = False
 
 # ============================================================
 # 模块8.5：爬虫伦理配置 - 请求延迟和并发控制

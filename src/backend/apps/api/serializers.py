@@ -24,3 +24,16 @@ class SeedURLSerializer(serializers.ModelSerializer):
         model = SeedURL
         fields = '__all__'
         read_only_fields = ('created_at',)
+        
+        
+# apps/api/serializers.py 中添加
+
+from .models import CrawlTask
+
+class CrawlTaskSerializer(serializers.ModelSerializer):
+    """爬虫任务序列化器"""
+    
+    class Meta:
+        model = CrawlTask
+        fields = '__all__'
+        read_only_fields = ('task_id', 'created_at', 'updated_at')

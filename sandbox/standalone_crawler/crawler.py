@@ -153,7 +153,7 @@ async def crawl(
         async def _worker(url: str) -> dict[str, Any]:
             async with semaphore:
                 return await process_page(
-                    url, depth, output_dirs, bloom,
+                    url, depth, bloom,
                     allowed_domains=_allowed_domains,
                     white_list_patterns=_white_patterns,
                 )
