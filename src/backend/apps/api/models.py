@@ -105,6 +105,8 @@ class CrawlTask(models.Model):
     STATUS_CHOICES = [
         ('pending', '等待中'),
         ('running', '运行中'),
+        ('paused', '已暂停'),      
+        ('stopped', '已停止'),     
         ('completed', '已完成'),
         ('failed', '失败'),
     ]
@@ -130,3 +132,37 @@ class CrawlTask(models.Model):
     
     def __str__(self):
         return f"{self.task_id} - {self.status}"
+    
+    
+class Template(models.Model):
+    """爬取模板"""
+    name = models.CharField(max_length=100, verbose_name="模板名称")
+    seed_url = models.URLField(verbose_name="种子URL")
+    tags = models.JSONField(default=list, blank=True, verbose_name="标签列表")
+    ai_prompt = models.TextField(blank=True, verbose_name="AI提示词")
+    description = models.TextField(blank=True, verbose_name="模板描述")
+    config = models.JSONField(default=dict, verbose_name="爬虫配置")
+    usage_count = models.IntegerField(default=0, verbose_name="使用次数")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'templates'
+        verbose_name = '爬取模板'
+        verbose_name_plural = '爬取模板'
+    
+    def __str__(self):
+        return self.name
+
+
+class User(models.Model):
+    """用户模型（简单版，如不使用Django内置）"""
+    username = models.CharField(max_length=50, unique=True)
+    password = models.CharField(max_length=128)  # 存哈希
+    email = models.EmailField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'users'
+        
+        

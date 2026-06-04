@@ -545,3 +545,519 @@ def start_crawl(request):
         
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+    
+    
+# ==================== 认证授权接口 ====================
+
+import hashlib
+import secrets
+from django.contrib.auth.hashers import make_password, check_password
+from django.core.mail import send_mail
+from django.conf import settings
+import random
+import string
+
+
+# 简单的验证码存储（生产环境应用Redis）
+email_code_cache = {}
+
+
+@api_view(['POST'])
+def login(request):
+    """用户登录"""
+    username = request.data.get('username')
+    password = request.data.get('password')
+    
+    if not username or not password:
+        return Response({'success': False, 'error': '用户名和密码不能为空'}, status=400)
+    
+    try:
+        from .models import User
+        user = User.objects.get(username=username)
+        
+        if check_password(password, user.password):
+            # 生成简单token（生产环境建议用JWT）
+            token = hashlib.md5(f"{username}{secrets.token_hex(8)}".encode()).hexdigest()
+            return Response({
+                'success': True,
+                'token': token,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email
+                }
+            })
+        else:
+            return Response({'success': False, 'error': '密码错误'}, status=401)
+    except Exception as e:
+        return Response({'success': False, 'error': '用户不存在'}, status=401)
+
+
+@api_view(['POST'])
+def register(request):
+    """用户注册"""
+    username = request.data.get('username')
+    password = request.data.get('password')
+    email = request.data.get('email', '')
+    email_code = request.data.get('email_code', '')
+    
+    if not username or not password:
+        return Response({'success': False, 'error': '用户名和密码不能为空'}, status=400)
+    
+    from .models import User
+    
+    if User.objects.filter(username=username).exists():
+        return Response({'success': False, 'error': '用户名已存在'}, status=400)
+    
+    # 验证邮箱验证码（如果提供了邮箱）
+    if email:
+        cache_key = f"{email}_register"
+        if email_code_cache.get(cache_key) != email_code:
+            return Response({'success': False, 'error': '验证码错误或已过期'}, status=400)
+        del email_code_cache[cache_key]
+    
+    user = User.objects.create(
+        username=username,
+        password=make_password(password),
+        email=email
+    )
+    
+    return Response({
+        'success': True,
+        'message': '注册成功',
+        'user': {'id': user.id, 'username': user.username}
+    })
+
+
+@api_view(['POST'])
+def send_email_code(request):
+    """发送邮箱验证码"""
+    email = request.data.get('email')
+    if not email:
+        return Response({'success': False, 'error': '邮箱不能为空'}, status=400)
+    
+    # 生成6位验证码
+    code = ''.join(random.choices(string.digits, k=6))
+    
+    try:
+        send_mail(
+            subject='【爬虫平台】验证码',
+            message=f'您的验证码是：{code}，有效期5分钟。',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        
+        # 存储验证码，有效期5分钟
+        cache_key = f"{email}_register"
+        email_code_cache[cache_key] = code
+        
+        return Response({'success': True, 'message': '验证码已发送'})
+    except Exception as e:
+        return Response({'success': False, 'error': f'发送失败：{str(e)}'}, status=500)
+
+
+# ==================== 模板管理接口 ====================
+
+from .models import Template  # 确保 Template 已导入
+
+
+@api_view(['GET', 'POST'])
+def template_list(request):
+    """获取模板列表 / 创建模板"""
+    from .models import Template
+    
+    if request.method == 'GET':
+        search = request.query_params.get('search', '')
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        
+        queryset = Template.objects.all()
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # 分页
+        start = (page - 1) * page_size
+        end = start + page_size
+        results = queryset[start:end]
+        
+        return Response({
+            'count': queryset.count(),
+            'results': [
+                {
+                    'id': t.id,
+                    'name': t.name,
+                    'seed_url': t.seed_url,
+                    'tags': t.tags,
+                    'ai_prompt': t.ai_prompt,
+                    'description': t.description,
+                    'usage_count': t.usage_count,
+                    'created_at': t.created_at
+                }
+                for t in results
+            ]
+        })
+    
+    elif request.method == 'POST':
+        # 校验标签数量（最多5个，每个最多8字）
+        tags = request.data.get('tags', [])
+        if len(tags) > 5:
+            return Response({'error': '标签最多5个'}, status=400)
+        for tag in tags:
+            if len(tag) > 8:
+                return Response({'error': f'标签"{tag}"超过8个字'}, status=400)
+        
+        template = Template.objects.create(
+            name=request.data.get('name'),
+            seed_url=request.data.get('seed_url'),
+            tags=tags,
+            ai_prompt=request.data.get('ai_prompt', ''),
+            description=request.data.get('description', ''),
+            config=request.data.get('config', {})
+        )
+        
+        return Response({
+            'id': template.id,
+            'name': template.name,
+            'created_at': template.created_at
+        }, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+def template_detail(request, pk):
+    """获取/更新/删除单个模板"""
+    from .models import Template
+    
+    try:
+        template = Template.objects.get(pk=pk)
+    except Template.DoesNotExist:
+        return Response({'error': '模板不存在'}, status=404)
+    
+    if request.method == 'GET':
+        # 获取预览数据（从已保存的页面中取几条）
+        preview_data = PageSnapshot.objects.filter(
+            category__in=template.tags if template.tags else ['']
+        ).values('extracted_data')[:5]
+        
+        return Response({
+            'id': template.id,
+            'name': template.name,
+            'seed_url': template.seed_url,
+            'tags': template.tags,
+            'ai_prompt': template.ai_prompt,
+            'description': template.description,
+            'config': template.config,
+            'preview_data': [p['extracted_data'] for p in preview_data if p['extracted_data']],
+            'created_at': template.created_at,
+            'updated_at': template.updated_at
+        })
+    
+    elif request.method == 'PUT':
+        template.name = request.data.get('name', template.name)
+        template.seed_url = request.data.get('seed_url', template.seed_url)
+        template.tags = request.data.get('tags', template.tags)
+        template.ai_prompt = request.data.get('ai_prompt', template.ai_prompt)
+        template.description = request.data.get('description', template.description)
+        template.config = request.data.get('config', template.config)
+        template.save()
+        
+        return Response({'success': True, 'message': '更新成功'})
+    
+    elif request.method == 'DELETE':
+        template.delete()
+        return Response({'success': True, 'message': '删除成功'})
+
+
+# ==================== 任务控制接口（成员D用）====================
+
+@api_view(['POST'])
+def start_task_v2(request):
+    """启动采集任务（成员D用）"""
+    template_id = request.data.get('template_id')
+    seed_url = request.data.get('seed_url')
+    config = request.data.get('config', {})
+    
+    from .models import Template, CrawlTask
+    
+    template_name = None
+    if template_id:
+        try:
+            template = Template.objects.get(pk=template_id)
+            seed_url = template.seed_url
+            template_name = template.name
+            # 更新使用次数
+            template.usage_count += 1
+            template.save()
+        except Template.DoesNotExist:
+            return Response({'error': '模板不存在'}, status=404)
+    
+    if not seed_url:
+        return Response({'error': 'seed_url不能为空'}, status=400)
+    
+    # 生成任务名称
+    from datetime import datetime
+    task_name = f"{template_name or '采集任务'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # 创建任务（复用现有CrawlTask模型）
+    task = CrawlTask.objects.create(
+        seed_url=seed_url,
+        max_depth=config.get('max_depth', 2),
+        status='pending'
+    )
+    
+    # 启动后台爬虫
+    thread = threading.Thread(
+        target=run_async_crawl,
+        args=(str(task.task_id), seed_url, task.max_depth, config),
+        daemon=True
+    )
+    thread.start()
+    
+    return Response({
+        'task_id': str(task.task_id),
+        'task_name': task_name,
+        'status': 'running',
+        'message': '任务已启动',
+        'created_at': task.created_at
+    })
+
+
+@api_view(['POST'])
+def pause_task(request, task_id):
+    """暂停任务"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        
+        if task.status != 'running':
+            return Response({'error': '只有运行中的任务可以暂停'}, status=400)
+        
+        task.status = 'paused'
+        task.save()
+        
+        return Response({
+            'success': True,
+            'task_id': task_id,
+            'status': 'paused',
+            'message': '任务已暂停'
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+@api_view(['POST'])
+def stop_task(request, task_id):
+    """停止任务"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        
+        if task.status not in ['running', 'paused']:
+            return Response({'error': '只有运行中或暂停的任务可以停止'}, status=400)
+        
+        task.status = 'stopped'
+        task.save()
+        
+        return Response({
+            'success': True,
+            'task_id': task_id,
+            'status': 'stopped',
+            'message': '任务已停止'
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+@api_view(['DELETE'])
+def delete_task(request, task_id):
+    """删除任务"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        task.delete()
+        
+        return Response({'success': True, 'message': '任务已删除'})
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+# ==================== 任务查询接口（成员D用）====================
+
+@api_view(['GET'])
+def task_list_v2(request):
+    """获取任务列表（支持状态筛选）"""
+    status_filter = request.query_params.get('status', '')
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 20))
+    
+    queryset = CrawlTask.objects.all()
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    
+    # 分页
+    start = (page - 1) * page_size
+    end = start + page_size
+    results = queryset.order_by('-created_at')[start:end]
+    
+    result_list = []
+    for t in results:
+        duration = None
+        if t.created_at and t.updated_at:
+            delta = t.updated_at - t.created_at
+            minutes = delta.total_seconds() // 60
+            seconds = delta.total_seconds() % 60
+            duration = f"{int(minutes):02d}:{int(seconds):02d}"
+        
+        result_list.append({
+            'task_id': str(t.task_id),
+            'task_name': f"任务_{t.created_at.strftime('%Y%m%d_%H%M%S')}",
+            'template_name': None,
+            'status': t.status,
+            'duration': duration or '00:00',
+            'progress': f"{t.success_pages}/{t.total_pages}" if t.total_pages > 0 else '0/0',
+            'progress_percent': int(t.success_pages / max(t.total_pages, 1) * 100),
+            'total_pages': t.total_pages,
+            'success_pages': t.success_pages,
+            'failed_pages': t.failed_pages,
+            'error_message': t.error_message,
+            'created_at': t.created_at,
+            'started_at': t.created_at,
+            'completed_at': t.updated_at if t.status == 'completed' else None
+        })
+    
+    return Response({
+        'count': queryset.count(),
+        'results': result_list
+    })
+
+
+@api_view(['GET'])
+def task_detail(request, task_id):
+    """获取任务详情"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        return Response({
+            'task_id': str(task.task_id),
+            'task_name': f"任务_{task.created_at.strftime('%Y%m%d_%H%M%S')}",
+            'template_id': None,
+            'template_name': None,
+            'status': task.status,
+            'config': {
+                'max_depth': task.max_depth,
+                'max_concurrent': 5,
+                'request_delay': 1.0
+            },
+            'total_pages': task.total_pages,
+            'success_pages': task.success_pages,
+            'failed_pages': task.failed_pages,
+            'current_url': None,
+            'created_at': task.created_at,
+            'started_at': task.created_at,
+            'estimated_completion': None
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+@api_view(['GET'])
+def task_progress(request, task_id):
+    """获取任务进度"""
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        
+        total = max(task.total_pages, 1)
+        current = task.success_pages
+        
+        elapsed = None
+        if task.created_at:
+            delta = timezone.now() - task.created_at
+            minutes = delta.total_seconds() // 60
+            seconds = delta.total_seconds() % 60
+            elapsed = f"{int(minutes):02d}:{int(seconds):02d}"
+        
+        return Response({
+            'task_id': str(task.task_id),
+            'status': task.status,
+            'current': current,
+            'total': task.total_pages or 100,
+            'percent': int(current / total * 100),
+            'message': f"已采集{current}页",
+            'elapsed_time': elapsed or '00:00',
+            'estimated_remaining': None
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+@api_view(['GET'])
+def task_preview(request, task_id):
+    """获取采集数据预览"""
+    limit = int(request.query_params.get('limit', 5))
+    
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        
+        pages = PageSnapshot.objects.filter(url__startswith=task.seed_url).order_by('-created_at')[:limit]
+        
+        preview = []
+        for page in pages:
+            if page.extracted_data:
+                preview.append(page.extracted_data)
+            else:
+                # 如果没有extracted_data，尝试从markdown中提取
+                preview.append({
+                    'url': page.url,
+                    'category': page.category,
+                    'content_preview': page.markdown[:200] if page.markdown else '',
+                    'created_at': page.created_at
+                })
+        
+        return Response({
+            'total': PageSnapshot.objects.filter(url__startswith=task.seed_url).count(),
+            'preview': preview
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
+
+
+@api_view(['GET'])
+def task_download(request, task_id):
+    """下载任务结果"""
+    import csv
+    from django.http import HttpResponse
+    from io import StringIO
+    
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        
+        pages = PageSnapshot.objects.filter(url__startswith=task.seed_url)
+        
+        format_type = request.query_params.get('format', 'json')
+        
+        if format_type == 'csv':
+            output = StringIO()
+            writer = csv.writer(output)
+            writer.writerow(['URL', '分类', '提取数据', '创建时间'])
+            
+            for page in pages:
+                writer.writerow([
+                    page.url,
+                    page.category,
+                    str(page.extracted_data) if page.extracted_data else page.markdown[:200],
+                    page.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                ])
+            
+            response = HttpResponse(output.getvalue(), content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="task_{task_id}_result.csv"'
+            return response
+        else:
+            data = [
+                {
+                    'url': page.url,
+                    'category': page.category,
+                    'extracted_data': page.extracted_data or page.markdown,
+                    'created_at': page.created_at
+                }
+                for page in pages
+            ]
+            return Response(data)
+            
+    except CrawlTask.DoesNotExist:
+        return Response({'error': '任务不存在'}, status=404)
