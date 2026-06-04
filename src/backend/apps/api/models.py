@@ -8,22 +8,53 @@ from django.db import models
 
 class PageSnapshot(models.Model):
     """网页快照模型"""
+    # 原有字段
     url = models.URLField(unique=True, verbose_name="URL地址")
     markdown = models.TextField(verbose_name="Markdown内容")
     content_hash = models.CharField(max_length=64, verbose_name="内容哈希")
     category = models.CharField(max_length=50, null=True, blank=True, verbose_name="分类")
-    images = models.JSONField(default=list, blank=True, verbose_name="图片列表")  # 新增
+    images = models.JSONField(default=list, blank=True, verbose_name="图片列表")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
     version = models.IntegerField(default=1, verbose_name="版本号")
+    
+    # 你已添加的字段
+    raw_html = models.TextField(blank=True, null=True, verbose_name="原始HTML")
+    extracted_data = models.JSONField(default=dict, blank=True, verbose_name="提取数据")
+    process_status = models.CharField(
+        max_length=20, 
+        default='pending',
+        choices=[
+            ('pending', '待处理'),
+            ('processing', '处理中'),
+            ('completed', '已完成'),
+            ('failed', '失败'),
+        ],
+        verbose_name="处理状态"
+    )
+    processed_at = models.DateTimeField(blank=True, null=True, verbose_name="处理时间")
+    
+    # 新增字段
+    page_type = models.CharField(
+        max_length=20, 
+        blank=True, 
+        null=True,
+        choices=[
+            ('teacher', '教师'),
+            ('course', '课程'),
+            ('research', '科研'),
+            ('unknown', '未知'),
+        ],
+        verbose_name="页面类型"
+    )
+    retry_count = models.IntegerField(default=0, verbose_name="重试次数")
+    last_error = models.TextField(blank=True, null=True, verbose_name="最后错误")
+    process_error = models.TextField(blank=True, null=True, verbose_name="处理错误")
     
     class Meta:
         db_table = 'page_snapshots'
         verbose_name = '网页快照'
         verbose_name_plural = '网页快照'
-    
-    def __str__(self):
-        return self.url
 
 
 class SeedURL(models.Model):

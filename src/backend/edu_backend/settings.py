@@ -217,3 +217,13 @@ LOGGING = {
         'level': 'INFO',
     },
 }
+
+# settings.py 添加
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'process-conversion': {
+        'task': 'apps.api.tasks.process_conversion_task',
+        'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
+    },
+}
