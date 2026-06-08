@@ -1,29 +1,12 @@
-/**
- * BaseLayout.vue
- * 
- * 功能说明：
- * - 全局布局组件，包含左侧导航栏、顶部栏和右侧内容区
- * - 左侧导航栏支持折叠/展开，折叠时只显示图标，不显示文字
- * - 顶部栏包含面包屑导航和用户信息（圆形头像框 + 用户图标 + 下拉菜单）
- * - 右侧区域通过 <router-view /> 动态渲染页面内容
- * 
- * 使用场景：
- * - 所有页面都挂载在 BaseLayout 下，保证统一的导航和顶栏
- * 
- * 注意事项：
- * - 使用 Element Plus 的 el-menu 提供导航功能
- * - 使用 @element-plus/icons-vue 提供菜单和用户图标
- */
-
 <template>
   <div class="base-layout">
     <!-- 左侧导航栏容器 -->
     <div class="sidebar" :class="{ collapsed: isCollapse }">
       <el-menu
-        :default-active="activeMenu"
+        :default-active="$route.path"
+        router
         class="el-menu-vertical"
         :collapse="isCollapse"
-        @select="handleSelect"
       >
         <!-- 顶部 Logo -->
         <div class="sidebar-logo" @click="toggleCollapse">
@@ -31,28 +14,28 @@
           <span v-else>E</span>
         </div>
 
-        <!-- 菜单项：图标 + 文字（折叠时文字隐藏） -->
-        <el-menu-item index="home">
+        <!-- 菜单项 -->
+        <el-menu-item index="/home">
           <el-icon><House /></el-icon>
           <span v-if="!isCollapse">首页</span>
         </el-menu-item>
 
-        <el-menu-item index="guide">
+        <el-menu-item index="/guide">
           <el-icon><Document /></el-icon>
           <span v-if="!isCollapse">操作指南</span>
         </el-menu-item>
 
-        <el-menu-item index="templates">
+        <el-menu-item index="/templates">
           <el-icon><Folder /></el-icon>
           <span v-if="!isCollapse">模板页面</span>
         </el-menu-item>
 
-        <el-menu-item index="create-template">
+        <el-menu-item index="/templates/create">
           <el-icon><Plus /></el-icon>
           <span v-if="!isCollapse">新建模板</span>
         </el-menu-item>
 
-        <el-menu-item index="tasks">
+        <el-menu-item index="/tasks">
           <el-icon><Monitor /></el-icon>
           <span v-if="!isCollapse">任务监控</span>
         </el-menu-item>
@@ -67,7 +50,6 @@
         <div class="user-info">
           <el-dropdown>
             <span class="el-dropdown-link">
-              <!-- 圆形头像框 + 用户图标 -->
               <el-avatar :icon="User" />
             </span>
             <template #dropdown>
@@ -89,7 +71,6 @@
 
 <script>
 import AppBreadcrumb from '../components/AppBreadcrumb.vue'
-// 引入 Element Plus 图标
 import { House, Document, Folder, Plus, Monitor, User } from '@element-plus/icons-vue'
 
 export default {
@@ -97,17 +78,12 @@ export default {
   components: { AppBreadcrumb, House, Document, Folder, Plus, Monitor, User },
   data() {
     return {
-      isCollapse: false,   // 控制侧边栏折叠
-      activeMenu: 'home'
+      isCollapse: false
     }
   },
   methods: {
-    handleSelect(key) {
-      this.activeMenu = key
-      this.$router.push(`/${key}`)
-    },
     toggleCollapse() {
-      this.isCollapse = !this.isCollapse   // 点击 Logo 切换折叠状态
+      this.isCollapse = !this.isCollapse
     },
     logout() {
       alert('已退出登录')
@@ -122,8 +98,6 @@ export default {
   display: flex;
   height: 100vh;
 }
-
-/* 左侧导航栏容器 */
 .sidebar {
   width: 200px;
   transition: width 0.3s;
@@ -132,8 +106,6 @@ export default {
 .sidebar.collapsed {
   width: 64px;
 }
-
-/* 顶部 Logo */
 .sidebar-logo {
   height: 60px;
   line-height: 60px;
@@ -143,26 +115,18 @@ export default {
   border-bottom: 1px solid #ddd;
   user-select: none;
 }
-
-/* 菜单样式 */
 .el-menu-vertical {
   border-right: none;
   min-height: 100vh;
 }
-
-/* 折叠时隐藏文字 */
 .sidebar.collapsed .el-menu-item span {
   display: none;
 }
-
-/* 右侧区域 */
 .right-area {
   flex: 1;
   display: flex;
   flex-direction: column;
 }
-
-/* 顶端栏 */
 .top-bar {
   display: flex;
   justify-content: space-between;
@@ -181,8 +145,6 @@ export default {
   align-items: center;
   cursor: pointer;
 }
-
-/* 内容区 */
 .content {
   flex: 1;
   padding: 20px;

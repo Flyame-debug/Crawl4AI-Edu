@@ -1,10 +1,5 @@
 /**
  * 路由配置文件 (index.js)
- * 
- * 功能说明：
- * - 定义前端页面的路由映射关系
- * - 管理页面跳转与导航逻辑
- * - 使用 Vue Router 提供的 createRouter 和 createWebHistory
  */
 
 import { createRouter, createWebHistory } from 'vue-router'
@@ -20,7 +15,6 @@ import TaskMonitor from '../views/TaskMonitor.vue'
 import TemplateDetail from '../views/TemplateDetail.vue'
 
 const routes = [
-  // 登录注册页
   {
     path: '/',
     redirect: '/auth'
@@ -31,8 +25,6 @@ const routes = [
     component: LoginRegister,
     meta: { breadcrumb: '登录注册' }
   },
-
-  // 主布局下的页面
   {
     path: '/',
     component: BaseLayout,
@@ -62,7 +54,7 @@ const routes = [
         meta: { breadcrumb: '模板详情' }
       },
       {
-        path: 'create-template',
+        path: 'templates/create',
         name: 'TemplateCreator',
         component: TemplateCreator,
         meta: { breadcrumb: '新建模板' }

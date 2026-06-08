@@ -24,6 +24,12 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 底部提示 -->
+    <div class="new-template-hint">
+      没有想要找的模板？
+      <span class="link" @click="goCreate">点击新建</span>
+    </div>
   </div>
 </template>
 
@@ -54,6 +60,9 @@ export default {
   methods: {
     openDetail(template) {
       this.$router.push(`/templates/${template.id}`)
+    },
+    goCreate() {
+      this.$router.push('/templates/create')
     }
   }
 }
@@ -82,5 +91,19 @@ export default {
   font-size: 12px;
   color: #888;
   margin-top: 10px;
+}
+.new-template-hint {
+  text-align: right;
+  margin-top: 20px;
+  font-size: 13px;
+  color: #666;
+}
+.link {
+  color: #409EFF;
+  cursor: pointer;
+  margin-left: 5px;
+}
+.link:hover {
+  text-decoration: underline;
 }
 </style>
