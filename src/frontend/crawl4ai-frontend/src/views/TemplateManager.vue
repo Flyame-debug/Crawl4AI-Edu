@@ -9,8 +9,13 @@
       clearable
       class="search-bar"
     >
+      <!-- 左侧图标 -->
       <template #prefix>
         <el-icon><Search /></el-icon>
+      </template>
+      <!-- 右侧搜索按钮 -->
+      <template #append>
+        <el-button type="primary" @click="doSearch">搜索</el-button>
       </template>
     </el-input>
 
@@ -63,6 +68,13 @@ export default {
     },
     goCreate() {
       this.$router.push('/templates/create')
+    },
+    doSearch() {
+      if (!this.searchQuery.trim()) {
+        this.$message.warning('请输入搜索关键词')
+        return
+      }
+      this.$message.info(`正在搜索：${this.searchQuery}`)
     }
   }
 }
