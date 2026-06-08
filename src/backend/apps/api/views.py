@@ -552,14 +552,7 @@ def start_crawl(request):
 import hashlib
 import secrets
 from django.contrib.auth.hashers import make_password, check_password
-from django.core.mail import send_mail
-from django.conf import settings
-import random
-import string
-
-
-# 简单的验证码存储（生产环境应用Redis）
-email_code_cache = {}
+from django.utils import timezone
 
 
 @api_view(['POST'])
@@ -576,7 +569,7 @@ def login(request):
         user = User.objects.get(username=username)
         
         if check_password(password, user.password):
-            # 生成简单token（生产环境建议用JWT）
+            # 生成简单token
             token = hashlib.md5(f"{username}{secrets.token_hex(8)}".encode()).hexdigest()
             return Response({
                 'success': True,
@@ -589,7 +582,7 @@ def login(request):
             })
         else:
             return Response({'success': False, 'error': '密码错误'}, status=401)
-    except Exception as e:
+    except User.DoesNotExist:
         return Response({'success': False, 'error': '用户不存在'}, status=401)
 
 
@@ -599,7 +592,6 @@ def register(request):
     username = request.data.get('username')
     password = request.data.get('password')
     email = request.data.get('email', '')
-    email_code = request.data.get('email_code', '')
     
     if not username or not password:
         return Response({'success': False, 'error': '用户名和密码不能为空'}, status=400)
@@ -608,13 +600,6 @@ def register(request):
     
     if User.objects.filter(username=username).exists():
         return Response({'success': False, 'error': '用户名已存在'}, status=400)
-    
-    # 验证邮箱验证码（如果提供了邮箱）
-    if email:
-        cache_key = f"{email}_register"
-        if email_code_cache.get(cache_key) != email_code:
-            return Response({'success': False, 'error': '验证码错误或已过期'}, status=400)
-        del email_code_cache[cache_key]
     
     user = User.objects.create(
         username=username,
@@ -629,38 +614,7 @@ def register(request):
     })
 
 
-@api_view(['POST'])
-def send_email_code(request):
-    """发送邮箱验证码"""
-    email = request.data.get('email')
-    if not email:
-        return Response({'success': False, 'error': '邮箱不能为空'}, status=400)
-    
-    # 生成6位验证码
-    code = ''.join(random.choices(string.digits, k=6))
-    
-    try:
-        send_mail(
-            subject='【爬虫平台】验证码',
-            message=f'您的验证码是：{code}，有效期5分钟。',
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
-        )
-        
-        # 存储验证码，有效期5分钟
-        cache_key = f"{email}_register"
-        email_code_cache[cache_key] = code
-        
-        return Response({'success': True, 'message': '验证码已发送'})
-    except Exception as e:
-        return Response({'success': False, 'error': f'发送失败：{str(e)}'}, status=500)
-
-
 # ==================== 模板管理接口 ====================
-
-from .models import Template  # 确保 Template 已导入
-
 
 @api_view(['GET', 'POST'])
 def template_list(request):
@@ -726,7 +680,7 @@ def template_list(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 def template_detail(request, pk):
     """获取/更新/删除单个模板"""
-    from .models import Template
+    from .models import Template, PageSnapshot
     
     try:
         template = Template.objects.get(pk=pk)
@@ -734,7 +688,7 @@ def template_detail(request, pk):
         return Response({'error': '模板不存在'}, status=404)
     
     if request.method == 'GET':
-        # 获取预览数据（从已保存的页面中取几条）
+        # 获取预览数据
         preview_data = PageSnapshot.objects.filter(
             category__in=template.tags if template.tags else ['']
         ).values('extracted_data')[:5]
@@ -768,11 +722,11 @@ def template_detail(request, pk):
         return Response({'success': True, 'message': '删除成功'})
 
 
-# ==================== 任务控制接口（成员D用）====================
+# ==================== 任务控制接口（成员D用） ====================
 
 @api_view(['POST'])
-def start_task_v2(request):
-    """启动采集任务（成员D用）"""
+def start_task(request):
+    """启动采集任务"""
     template_id = request.data.get('template_id')
     seed_url = request.data.get('seed_url')
     config = request.data.get('config', {})
@@ -785,7 +739,6 @@ def start_task_v2(request):
             template = Template.objects.get(pk=template_id)
             seed_url = template.seed_url
             template_name = template.name
-            # 更新使用次数
             template.usage_count += 1
             template.save()
         except Template.DoesNotExist:
@@ -798,14 +751,14 @@ def start_task_v2(request):
     from datetime import datetime
     task_name = f"{template_name or '采集任务'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    # 创建任务（复用现有CrawlTask模型）
+    # 创建任务
     task = CrawlTask.objects.create(
         seed_url=seed_url,
         max_depth=config.get('max_depth', 2),
-        status='pending'
+        status='running'
     )
     
-    # 启动后台爬虫
+    # 启动后台爬虫线程
     thread = threading.Thread(
         target=run_async_crawl,
         args=(str(task.task_id), seed_url, task.max_depth, config),
@@ -878,11 +831,13 @@ def delete_task(request, task_id):
         return Response({'error': '任务不存在'}, status=404)
 
 
-# ==================== 任务查询接口（成员D用）====================
+# ==================== 任务查询接口（成员D用） ====================
 
 @api_view(['GET'])
-def task_list_v2(request):
+def task_list(request):
     """获取任务列表（支持状态筛选）"""
+    from .models import CrawlTask
+    
     status_filter = request.query_params.get('status', '')
     page = int(request.query_params.get('page', 1))
     page_size = int(request.query_params.get('page_size', 20))
@@ -899,8 +854,13 @@ def task_list_v2(request):
     result_list = []
     for t in results:
         duration = None
-        if t.created_at and t.updated_at:
+        if t.created_at and t.updated_at and t.status in ['completed', 'stopped', 'failed']:
             delta = t.updated_at - t.created_at
+            minutes = delta.total_seconds() // 60
+            seconds = delta.total_seconds() % 60
+            duration = f"{int(minutes):02d}:{int(seconds):02d}"
+        elif t.status == 'running' and t.created_at:
+            delta = timezone.now() - t.created_at
             minutes = delta.total_seconds() // 60
             seconds = delta.total_seconds() % 60
             duration = f"{int(minutes):02d}:{int(seconds):02d}"
@@ -919,7 +879,7 @@ def task_list_v2(request):
             'error_message': t.error_message,
             'created_at': t.created_at,
             'started_at': t.created_at,
-            'completed_at': t.updated_at if t.status == 'completed' else None
+            'completed_at': t.updated_at if t.status in ['completed', 'stopped', 'failed'] else None
         })
     
     return Response({
@@ -1001,11 +961,9 @@ def task_preview(request, task_id):
             if page.extracted_data:
                 preview.append(page.extracted_data)
             else:
-                # 如果没有extracted_data，尝试从markdown中提取
                 preview.append({
                     'url': page.url,
                     'category': page.category,
-                    'content_preview': page.markdown[:200] if page.markdown else '',
                     'created_at': page.created_at
                 })
         
@@ -1052,7 +1010,7 @@ def task_download(request, task_id):
                 {
                     'url': page.url,
                     'category': page.category,
-                    'extracted_data': page.extracted_data or page.markdown,
+                    'extracted_data': page.extracted_data if page.extracted_data else page.markdown,
                     'created_at': page.created_at
                 }
                 for page in pages
@@ -1061,3 +1019,77 @@ def task_download(request, task_id):
             
     except CrawlTask.DoesNotExist:
         return Response({'error': '任务不存在'}, status=404)
+
+
+# ==================== 仪表盘统计接口 ====================
+
+@api_view(['GET'])
+def get_dashboard_stats(request):
+    """获取仪表盘统计数据"""
+    from django.db.models import Count
+    from datetime import datetime, timedelta
+    
+    # 页面统计
+    total_pages = PageSnapshot.objects.count()
+    category_stats = dict(
+        PageSnapshot.objects.values('category')
+        .annotate(count=Count('id'))
+        .values_list('category', 'count')
+    )
+    
+    # 最近7天的抓取量
+    daily_stats = []
+    for i in range(6, -1, -1):
+        day = (datetime.now() - timedelta(days=i)).date()
+        count = PageSnapshot.objects.filter(created_at__date=day).count()
+        daily_stats.append({'date': day.isoformat(), 'count': count})
+    
+    # 任务统计
+    task_total = CrawlTask.objects.count()
+    task_completed = CrawlTask.objects.filter(status='completed').count()
+    task_failed = CrawlTask.objects.filter(status='failed').count()
+    task_running = CrawlTask.objects.filter(status='running').count()
+    task_paused = CrawlTask.objects.filter(status='paused').count()
+    task_stopped = CrawlTask.objects.filter(status='stopped').count()
+    
+    success_rate = (task_completed / max(task_total, 1)) * 100
+    
+    # 种子统计
+    seed_total = SeedURL.objects.count()
+    seed_success = SeedURL.objects.filter(status='success').count()
+    seed_failed = SeedURL.objects.filter(status='failed').count()
+    seed_pending = SeedURL.objects.filter(status='pending').count()
+    
+    # 字段完整率
+    pages_with_extracted = PageSnapshot.objects.filter(
+        extracted_data__isnull=False
+    ).exclude(extracted_data={}).count()
+    field_completeness = (pages_with_extracted / max(total_pages, 1)) * 100
+    
+    return Response({
+        'pages': {
+            'total': total_pages,
+            'by_category': category_stats,
+            'daily': daily_stats,
+        },
+        'tasks': {
+            'total': task_total,
+            'running': task_running,
+            'paused': task_paused,
+            'stopped': task_stopped,
+            'completed': task_completed,
+            'failed': task_failed,
+            'success_rate': round(success_rate, 2),
+        },
+        'seeds': {
+            'total': seed_total,
+            'success': seed_success,
+            'failed': seed_failed,
+            'pending': seed_pending,
+        },
+        'quality': {
+            'field_completeness': round(field_completeness, 2),
+            'alert_threshold': 80,
+            'is_healthy': field_completeness >= 80 and success_rate >= 90,
+        }
+    })
