@@ -20,18 +20,59 @@ import TaskMonitor from '../views/TaskMonitor.vue'
 import TemplateDetail from '../views/TemplateDetail.vue'
 
 const routes = [
-  { path: '/', redirect: '/auth' },
-  { path: '/auth', name: 'Auth', component: LoginRegister, meta: { breadcrumb: '登录注册' } },
+  // 登录注册页
+  {
+    path: '/',
+    redirect: '/auth'
+  },
+  {
+    path: '/auth',
+    name: 'Auth',
+    component: LoginRegister,
+    meta: { breadcrumb: '登录注册' }
+  },
+
+  // 主布局下的页面
   {
     path: '/',
     component: BaseLayout,
     children: [
-      { path: 'home', name: 'Home', component: HomeView, meta: { breadcrumb: '首页' } },
-      { path: 'guide', name: 'Guide', component: Guide, meta: { breadcrumb: '操作指南' } },
-      { path: 'templates', name: 'TemplateManager', component: TemplateManager, meta: { breadcrumb: '模板页面' } },
-      { path: 'templates/:id', name: 'TemplateDetail', component: TemplateDetail, meta: { breadcrumb: '模板详情' } },
-      { path: 'create-template', name: 'TemplateCreator', component: TemplateCreator, meta: { breadcrumb: '新建模板' } },
-      { path: 'tasks', name: 'TaskMonitor', component: TaskMonitor, meta: { breadcrumb: '任务监控' } }
+      {
+        path: 'home',
+        name: 'Home',
+        component: HomeView,
+        meta: { breadcrumb: '首页' }
+      },
+      {
+        path: 'guide',
+        name: 'Guide',
+        component: Guide,
+        meta: { breadcrumb: '操作指南' }
+      },
+      {
+        path: 'templates',
+        name: 'TemplateManager',
+        component: TemplateManager,
+        meta: { breadcrumb: '模板页面' }
+      },
+      {
+        path: 'templates/:id',
+        name: 'TemplateDetail',
+        component: TemplateDetail,
+        meta: { breadcrumb: '模板详情' }
+      },
+      {
+        path: 'create-template',
+        name: 'TemplateCreator',
+        component: TemplateCreator,
+        meta: { breadcrumb: '新建模板' }
+      },
+      {
+        path: 'tasks',
+        name: 'TaskMonitor',
+        component: TaskMonitor,
+        meta: { breadcrumb: '任务监控' }
+      }
     ]
   }
 ]

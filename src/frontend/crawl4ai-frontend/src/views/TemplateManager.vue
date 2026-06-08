@@ -20,6 +20,7 @@
         <el-card shadow="hover" @dblclick="openDetail(template)">
           <h3>{{ template.name }}</h3>
           <p>{{ template.description }}</p>
+          <p class="hint">💡 双击进入详情</p>
         </el-card>
       </el-col>
     </el-row>
@@ -68,5 +69,18 @@ export default {
 }
 .template-list {
   margin-top: 20px;
+}
+.el-card {
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.el-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+}
+.hint {
+  font-size: 12px;
+  color: #888;
+  margin-top: 10px;
 }
 </style>

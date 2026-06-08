@@ -4,7 +4,7 @@
  * 功能说明：
  * - 全局布局组件，包含左侧导航栏、顶部栏和右侧内容区
  * - 左侧导航栏支持折叠/展开，折叠时只显示图标，不显示文字
- * - 顶部栏包含面包屑导航和用户信息（头像 + 下拉菜单）
+ * - 顶部栏包含面包屑导航和用户信息（圆形头像框 + 用户图标 + 下拉菜单）
  * - 右侧区域通过 <router-view /> 动态渲染页面内容
  * 
  * 使用场景：
@@ -12,7 +12,7 @@
  * 
  * 注意事项：
  * - 使用 Element Plus 的 el-menu 提供导航功能
- * - 使用 @element-plus/icons-vue 提供菜单图标
+ * - 使用 @element-plus/icons-vue 提供菜单和用户图标
  */
 
 <template>
@@ -67,7 +67,8 @@
         <div class="user-info">
           <el-dropdown>
             <span class="el-dropdown-link">
-              <el-avatar icon="UserFilled" />
+              <!-- 圆形头像框 + 用户图标 -->
+              <el-avatar :icon="User" />
             </span>
             <template #dropdown>
               <el-dropdown-menu>
@@ -89,11 +90,11 @@
 <script>
 import AppBreadcrumb from '../components/AppBreadcrumb.vue'
 // 引入 Element Plus 图标
-import { House, Document, Folder, Plus, Monitor } from '@element-plus/icons-vue'
+import { House, Document, Folder, Plus, Monitor, User } from '@element-plus/icons-vue'
 
 export default {
   name: 'BaseLayout',
-  components: { AppBreadcrumb, House, Document, Folder, Plus, Monitor },
+  components: { AppBreadcrumb, House, Document, Folder, Plus, Monitor, User },
   data() {
     return {
       isCollapse: false,   // 控制侧边栏折叠
@@ -178,6 +179,7 @@ export default {
 .user-info {
   display: flex;
   align-items: center;
+  cursor: pointer;
 }
 
 /* 内容区 */
