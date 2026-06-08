@@ -348,10 +348,3 @@ class CrawlerConfigAdmin(BaseAdmin):
     enabled_badge.short_description = '状态'
 
 
-# ==================== 用户 Admin（可选）====================
-@admin.register(User)
-class UserAdmin(BaseAdmin):
-    list_display = ['id', 'username', 'email', 'created_at']
-    search_fields = ['username', 'email']
-    readonly_fields = ['created_at']
-    list_per_page = 20
