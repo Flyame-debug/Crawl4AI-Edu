@@ -94,6 +94,10 @@ Examples:
         "--poll-interval", type=int, default=10,
         help="Seconds between seed-poll cycles in worker mode (default: 10).",
     )
+    parser.add_argument(
+        "--no-graceful", action="store_true", default=False,
+        help="Disable graceful shutdown on SIGINT/SIGTERM (default: enabled).",
+    )
     return parser
 
 
@@ -125,6 +129,7 @@ async def _main() -> None:
             api_client=api_client,
             poll_interval=args.poll_interval,
             max_depth=args.max_depth,
+            no_graceful=args.no_graceful,
         )
         return
 

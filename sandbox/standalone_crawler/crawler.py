@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -81,6 +82,25 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         return {}
 
 
+def _setup_signal_handlers(shutdown_event: asyncio.Event) -> None:
+    """Register OS signal handlers that set *shutdown_event* on SIGINT/SIGTERM.
+
+    Uses :func:`signal.signal` (thread-safe, compatible with Windows where
+    ``loop.add_signal_handler`` is unavailable).
+    """
+
+    def _handler(signum: int, frame: Any) -> None:
+        sig_name = signal.Signals(signum).name
+        logger.info("Received %s — initiating graceful shutdown.", sig_name)
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError) as exc:
+            logger.warning("Cannot register handler for %s: %s", sig, exc)
+
+
 # ===================================================================
 # Main entry point
 # ===================================================================
@@ -98,6 +118,7 @@ async def crawl(
     api_client: APIClient | None = None,
     poll_interval: int = _DEFAULT_POLL_INTERVAL,
     seed_list: list[dict[str, Any]] | None = None,
+    no_graceful: bool = False,
 ) -> Statistics | None:
     """Run a breadth-first crawl.
 
@@ -142,11 +163,30 @@ async def crawl(
         ad: list[str] | None,
         wp: list[str] | None,
         rd: float | None,
+        sd_event: asyncio.Event,
+        sd_enabled: bool,
     ) -> None:
-        """API worker loop — continuous polling or one-shot seed list."""
+        """API worker loop — continuous polling or one-shot seed list.
+
+        When *sd_enabled* is True, the loop checks *sd_event* before each
+        poll cycle and stops pulling new seeds once the event is set.
+        In-progress seeds are allowed to finish before returning.
+        """
+
+        # Track aggregate statistics across the worker session.
+        worker_total_pages: int = 0
+        worker_success_pages: int = 0
+        worker_failed_pages: int = 0
+        worker_total_images: int = 0
+        worker_seeds_done: int = 0
+        worker_seeds_failed: int = 0
 
         async def _process_single_seed(seed: dict[str, Any]) -> None:
             """Full lifecycle for one seed: mark crawling → BFS → report."""
+            nonlocal worker_total_pages, worker_success_pages
+            nonlocal worker_failed_pages, worker_total_images
+            nonlocal worker_seeds_done, worker_seeds_failed
+
             s_url: str = seed.get("url", "")
             if not s_url:
                 logger.error("Seed missing 'url' field — skipping: %s", seed)
@@ -163,6 +203,7 @@ async def crawl(
                 if not tid:
                     logger.error("start_crawl_task returned no task_id for %s", s_url)
                     await client.update_seed_status(s_url, "failed")
+                    worker_seeds_failed += 1
                     return
 
                 logger.info("Task started: %s for seed %s", tid, s_url)
@@ -180,10 +221,19 @@ async def crawl(
                 )
                 final: str = "success" if st.success > 0 else "failed"
                 await client.update_seed_status(s_url, final)
+                worker_total_pages += st.total
+                worker_success_pages += st.success
+                worker_failed_pages += st.failed
+                worker_total_images += st.total_images
+                if final == "success":
+                    worker_seeds_done += 1
+                else:
+                    worker_seeds_failed += 1
                 logger.info("Seed complete: %s → %s (pages=%d ok=%d fail=%d)",
                              s_url, final, st.total, st.success, st.failed)
             except Exception as exc:
                 logger.error("Seed %s failed: %s", s_url, exc)
+                worker_seeds_failed += 1
                 try:
                     await client.update_seed_status(s_url, "failed")
                     if tid:
@@ -201,7 +251,7 @@ async def crawl(
         cycle_n: int = 0
         api_cfg: dict[str, Any] = {}
 
-        while True:
+        while not (sd_enabled and sd_event.is_set()):
             cycle_n += 1
             if cycle_n == 1 or cycle_n % config_refresh == 0:
                 try:
@@ -213,7 +263,7 @@ async def crawl(
             _md = md if md is not None else api_cfg.get("max_depth", 2)
             _mc = mc if mc is not None else api_cfg.get("concurrency", 5)
             _rd = rd if rd is not None else api_cfg.get("request_delay", 1.0)
-            _ad = ad if ad is not None else api_cfg.get("allowed_domains", [])
+            _ad = ad if ad is not None else api_cfg.get("default_allowed_domains", [])
             _wp = wp if wp is not None else api_cfg.get("white_list_patterns", [])
             _edc = edc or api_cfg.get("enable_dead_check", False)
 
@@ -232,15 +282,36 @@ async def crawl(
 
             logger.info("Fetched %d pending seed(s).", len(pending))
             for seed in pending:
+                if sd_enabled and sd_event.is_set():
+                    logger.info("Shutdown requested — skipping remaining seeds in batch.")
+                    break
                 await _process_single_seed(seed)
+
+        # --- Graceful shutdown summary ---
+        if sd_enabled and sd_event.is_set():
+            logger.info(
+                "Graceful shutdown complete. "
+                "Seeds: %d done / %d failed | "
+                "Pages: %d total / %d ok / %d fail | "
+                "Images: %d",
+                worker_seeds_done, worker_seeds_failed,
+                worker_total_pages, worker_success_pages,
+                worker_failed_pages, worker_total_images,
+            )
     # --- end _run_api_worker --------------------------------------------------
 
     if use_api and seed_url is None:
         logger.info("Starting API worker mode (poll_interval=%ds)", poll_interval)
+        graceful_enabled = not no_graceful and os.getenv("ENABLE_GRACEFUL_EXIT", "1") != "0"
+        shutdown_event = asyncio.Event()
+        if graceful_enabled:
+            _setup_signal_handlers(shutdown_event)
+            logger.info("Graceful exit enabled — send SIGINT/SIGTERM to stop.")
         await _run_api_worker(
             api_client, poll_interval, seed_list,
             max_depth, max_concurrent, enable_dead_check,
             allowed_domains, white_list_patterns, request_delay,
+            shutdown_event, graceful_enabled,
         )
         return None
 
@@ -347,6 +418,7 @@ async def _run_bfs_crawl(
                     api_client=api_client,
                     task_id=task_id,
                     seed_meta=seed_meta,
+                    image_concurrency=_max_concurrent,
                 )
 
         results = await asyncio.gather(

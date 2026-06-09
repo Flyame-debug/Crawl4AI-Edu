@@ -62,7 +62,7 @@ class APIClient:
 
         Returns:
             Dict with keys: concurrency, request_delay, max_depth,
-            allowed_domains, white_list_patterns, enable_dead_check.
+            default_allowed_domains, white_list_patterns, enable_dead_check.
         """
         url = f"{self._base_url}/api/crawler/config/db/"
         return await self._request("GET", url)
