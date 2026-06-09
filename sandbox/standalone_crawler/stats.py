@@ -34,14 +34,15 @@ class Statistics:
         """Update counters from a ``process_page`` result dictionary.
 
         Args:
-            result: Dict with keys ``success``, ``images`` (dict), and
-                optionally ``error``.
+            result: Dict with keys ``success``, ``images`` (dict or list),
+                and optionally ``error``.
         """
         self.total += 1
         if result.get("success"):
             self.success += 1
-            imgs: dict = result.get("images", {})
-            self.total_images += len(imgs)
+            imgs = result.get("images", [])
+            if isinstance(imgs, (dict, list)):
+                self.total_images += len(imgs)
         else:
             self.failed += 1
 

@@ -1,8 +1,9 @@
 """Standalone crawler — assembles A1–A4 modules into a runnable BFS crawler."""
 
-from .crawler import crawl
+from .api_client import APIClient, APIClientError
+from .crawler import crawl, load_config
 
-__all__ = ["crawl"]
+__all__ = ["crawl", "load_config", "APIClient", "APIClientError"]
 
 
 if __name__ == "__main__":

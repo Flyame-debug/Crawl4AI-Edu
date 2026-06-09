@@ -1,18 +1,33 @@
-"""Minimal CLI entry point for the standalone crawler.
+"""CLI entry point for the standalone crawler — local and API modes.
 
 Usage::
 
     conda activate crawlai-edu
-    python sandbox/run_crawler.py <seed_url> [max_depth]
+
+    # Local mode (backward compatible)
+    python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]
+
+    # API worker mode (poll backend for pending seeds)
+    python sandbox/run_crawler.py --worker
+
+    # API one-shot mode (crawl a single seed via API)
+    python sandbox/run_crawler.py --use-api <seed_url>
+    python sandbox/run_crawler.py --use-api --seed <seed_url> [max_depth]
+
+    # Custom backend URL
+    python sandbox/run_crawler.py --worker --backend-url http://192.168.1.1:8000
 
 Examples::
 
     python sandbox/run_crawler.py https://httpbin.org/html
     python sandbox/run_crawler.py https://httpbin.org/html 2
+    python sandbox/run_crawler.py --worker --poll-interval 5
+    python sandbox/run_crawler.py --use-api --seed https://httpbin.org/html 1
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import sys
@@ -23,57 +38,126 @@ def _setup_path() -> None:
     """Add sandbox/ and project root to sys.path, and chdir to project root."""
     sandbox_dir = str(Path(__file__).resolve().parent)
     project_root = str(Path(__file__).resolve().parent.parent)
-    for _p in (sandbox_dir, project_root):
-        if _p not in sys.path:
-            sys.path.insert(0, _p)
+    for p in (sandbox_dir, project_root):
+        if p not in sys.path:
+            sys.path.insert(0, p)
     os.chdir(project_root)
 
 
-def _parse_args() -> tuple[str, int, str | None]:
-    """Extract seed URL, max depth, and optional config path from CLI.
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser supporting both legacy and new CLI styles."""
+    parser = argparse.ArgumentParser(
+        description="Crawl4AI standalone crawler — local and API modes.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python sandbox/run_crawler.py https://example.com           # local mode
+  python sandbox/run_crawler.py https://example.com 2         # local, depth 2
+  python sandbox/run_crawler.py --worker                      # API worker mode
+  python sandbox/run_crawler.py --use-api --seed URL          # API one-shot
+  python sandbox/run_crawler.py --worker --backend-url URL    # custom backend
+        """.strip(),
+    )
 
-    Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]
+    # Positional: seed_url, max_depth, config_path (for backward compat).
+    parser.add_argument(
+        "seed_url", nargs="?", default=None,
+        help="Seed URL (starting page for local or API one-shot mode).",
+    )
+    parser.add_argument(
+        "max_depth", nargs="?", type=int, default=None,
+        help="Maximum BFS depth (default: from config or 2).",
+    )
+    parser.add_argument(
+        "config_path", nargs="?", default=None,
+        help="Path to JSON config file (local mode only).",
+    )
 
-    Returns:
-        (seed_url, max_depth, config_path) tuple.  config_path is None when
-        not provided; the crawler then falls back to its built-in default.
-    """
-    if len(sys.argv) < 2:
-        print("Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]")
-        print("Example: python sandbox/run_crawler.py https://example.com 2 sandbox/crawler_config.json")
-        sys.exit(1)
-
-    seed_url: str = sys.argv[1]
-
-    max_depth: int = 2
-    if len(sys.argv) >= 3:
-        try:
-            max_depth = int(sys.argv[2])
-        except ValueError:
-            print(f"Invalid max_depth '{sys.argv[2]}' — using default 2.")
-        if max_depth < 1:
-            print("max_depth must be ≥ 1 — using 1.")
-            max_depth = 1
-
-    config_path: str | None = None
-    if len(sys.argv) >= 4:
-        config_path = sys.argv[3]
-    return seed_url, max_depth, config_path
+    # New optional flags.
+    parser.add_argument(
+        "--worker", action="store_true", default=False,
+        help="Start in API worker mode (poll backend for pending seeds).",
+    )
+    parser.add_argument(
+        "--use-api", action="store_true", default=False,
+        help="Enable API integration (use with --seed or positional seed_url).",
+    )
+    parser.add_argument(
+        "--seed", dest="api_seed", default=None,
+        help="Seed URL for API one-shot mode (alternative to positional).",
+    )
+    parser.add_argument(
+        "--backend-url", default=None,
+        help="Backend API base URL (overrides CRAWLER_BACKEND_URL env var).",
+    )
+    parser.add_argument(
+        "--poll-interval", type=int, default=10,
+        help="Seconds between seed-poll cycles in worker mode (default: 10).",
+    )
+    return parser
 
 
 async def _main() -> None:
     _setup_path()
-    seed_url, max_depth, config_path = _parse_args()
+
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # Determine effective seed URL.
+    effective_seed: str | None = args.api_seed or args.seed_url
+
+    # Resolve API client when needed.
+    api_client = None
+    use_api: bool = args.worker or args.use_api or os.getenv("USE_API", "").lower() == "true"
+
+    if use_api:
+        from standalone_crawler import APIClient
+
+        backend_url: str | None = args.backend_url or os.getenv("CRAWLER_BACKEND_URL")
+        api_client = APIClient(base_url=backend_url)
 
     from standalone_crawler import crawl
 
-    print(f"Starting crawl: seed={seed_url} max_depth={max_depth}")
-    if config_path:
-        print(f"Config: {config_path}")
+    if args.worker:
+        # API worker mode — continuous polling.
+        print(f"Starting API worker mode (backend={api_client._base_url}, poll={args.poll_interval}s)")
+        await crawl(
+            api_client=api_client,
+            poll_interval=args.poll_interval,
+            max_depth=args.max_depth,
+        )
+        return
+
+    if use_api and effective_seed:
+        # API one-shot mode.
+        print(f"Starting API one-shot crawl: seed={effective_seed} max_depth={args.max_depth or 'auto'}")
+        seed_list = [{"url": effective_seed}]
+        stats = await crawl(
+            seed_url=effective_seed,
+            max_depth=args.max_depth,
+            config_path=args.config_path,
+            api_client=api_client,
+            seed_list=seed_list,
+        )
+        if stats:
+            print(stats.report())
+        return
+
+    # Local mode (backward compatible).
+    if not effective_seed:
+        if use_api:
+            print("Error: --use-api requires a seed URL (via --seed or positional argument).")
+        else:
+            print("Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]")
+            print("       python sandbox/run_crawler.py --worker")
+            print("       python sandbox/run_crawler.py --use-api --seed <url>")
+        sys.exit(1)
+
+    print(f"Starting local crawl: seed={effective_seed} max_depth={args.max_depth or 'auto'}")
     stats = await crawl(
-        seed_url=seed_url,
-        max_depth=max_depth,
-        config_path=config_path,
+        seed_url=effective_seed,
+        max_depth=args.max_depth,
+        config_path=args.config_path,
     )
     print(stats.report())
 

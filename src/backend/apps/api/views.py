@@ -18,7 +18,7 @@ import base64
 
 from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask
 from .serializers import PageSnapshotSerializer, SeedURLSerializer
-from .services import PageSnapshotService
+from .services.snapshot_service import PageSnapshotService
 
 
 # ==================== PageSnapshot 视图 ====================

@@ -1,6 +1,6 @@
 #全量自测代码
 from apps.api.models import *
-from apps.api.services import PageSnapshotService
+from apps.api.services.snapshot_service import PageSnapshotService
 from apps.api.utils import MinioClient,robot_checker
 from django.conf import settings
 
