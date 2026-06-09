@@ -118,6 +118,8 @@ async def crawl(
     api_client: APIClient | None = None,
     poll_interval: int = _DEFAULT_POLL_INTERVAL,
     seed_list: list[dict[str, Any]] | None = None,
+    seed_urls: list[str] | None = None,
+    output_dir: str | None = None,
     no_graceful: bool = False,
 ) -> Statistics | None:
     """Run a breadth-first crawl.
@@ -346,7 +348,7 @@ async def crawl(
         seed_url=seed_url, max_depth=max_depth, max_concurrent=max_concurrent,
         enable_dead_check=enable_dead_check, allowed_domains=allowed_domains,
         white_list_patterns=white_list_patterns, request_delay=request_delay,
-        config_path=config_path,
+        config_path=config_path, seed_urls=seed_urls, output_dir=output_dir,
     )
 
 
@@ -367,6 +369,8 @@ async def _run_bfs_crawl(
     api_client: APIClient | None = None,
     task_id: str | None = None,
     seed_meta: dict[str, Any] | None = None,
+    seed_urls: list[str] | None = None,
+    output_dir: str | None = None,
 ) -> Statistics:
     """Core BFS crawl engine — processes one seed URL breadth-first.
 
@@ -391,15 +395,31 @@ async def _run_bfs_crawl(
     stats.start()
 
     bloom = create_bloom_filter("memory")
-    seed_norm = normalize_url(seed_url)
-    bloom.add(seed_norm)
 
-    output_dirs = {"html": "sandbox/data/html", "images": "sandbox/data/images"}
-    ensure_dir(output_dirs["html"])
-    ensure_dir(output_dirs["images"])
+    # Resolve output directory and mapping file.
+    _output_dir = output_dir or "sandbox/data"
+    _mapping_path: str | None = None
+    if api_client is None:
+        _mapping_path = f"{_output_dir}/mapping.txt"
+    ensure_dir(f"{_output_dir}/html")
+    ensure_dir(f"{_output_dir}/images")
+
+    # Build initial seed list: either from seed_urls or single seed_url.
+    if seed_urls:
+        initial_urls: list[str] = []
+        for u in seed_urls:
+            nu = normalize_url(u)
+            if not bloom.contains(nu):
+                bloom.add(nu)
+                initial_urls.append(nu)
+        logger.info("Loaded %d unique seed URLs (from %d input)", len(initial_urls), len(seed_urls))
+    else:
+        seed_norm = normalize_url(seed_url)
+        bloom.add(seed_norm)
+        initial_urls = [seed_norm]
 
     semaphore = asyncio.Semaphore(_max_concurrent)
-    current_level: list[str] = [seed_norm]
+    current_level: list[str] = initial_urls
 
     for depth in range(_max_depth + 1):
         if not current_level:
@@ -419,6 +439,8 @@ async def _run_bfs_crawl(
                     task_id=task_id,
                     seed_meta=seed_meta,
                     image_concurrency=_max_concurrent,
+                    output_dir=_output_dir,
+                    mapping_path=_mapping_path,
                 )
 
         results = await asyncio.gather(
