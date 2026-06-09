@@ -9,11 +9,9 @@
       clearable
       class="search-bar"
     >
-      <!-- 左侧图标 -->
       <template #prefix>
         <el-icon><Search /></el-icon>
       </template>
-      <!-- 右侧搜索按钮 -->
       <template #append>
         <el-button type="primary" @click="doSearch">搜索</el-button>
       </template>
@@ -62,6 +60,18 @@ export default {
       )
     }
   },
+  mounted() {
+    // 接收新建模板数据
+    if (this.$route.query.newTemplate) {
+      try {
+        const newTemplate = JSON.parse(this.$route.query.newTemplate)
+        this.addTemplate(newTemplate)
+        this.$message.success(`新模板【${newTemplate.name}】已添加`)
+      } catch (e) {
+        console.error('解析新模板失败', e)
+      }
+    }
+  },
   methods: {
     openDetail(template) {
       this.$router.push(`/templates/${template.id}`)
@@ -75,6 +85,10 @@ export default {
         return
       }
       this.$message.info(`正在搜索：${this.searchQuery}`)
+    },
+    addTemplate(newTemplate) {
+      const nextId = this.templates.length + 1
+      this.templates.push({ id: nextId, ...newTemplate })
     }
   }
 }

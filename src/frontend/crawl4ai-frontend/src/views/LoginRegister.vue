@@ -42,6 +42,8 @@
 </template>
 
 <script>
+import { login, register } from '../api/auth'
+
 export default {
   name: 'LoginRegisterPage',
   data() {
@@ -54,32 +56,82 @@ export default {
         password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
       },
       registerRules: {
-        username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-        password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-        email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }]
+        username: [
+          { required: true, message: '请输入账号', trigger: 'blur' },
+          { validator: this.validateUsername, trigger: 'blur' }
+        ],
+        password: [
+          { required: true, message: '请输入密码', trigger: 'blur' },
+          { validator: this.validatePassword, trigger: 'blur' }
+        ],
+        email: [
+          { required: true, message: '请输入邮箱', trigger: 'blur' },
+          { validator: this.validateEmail, trigger: 'blur' }
+        ]
       }
     }
   },
   methods: {
-    // 前端假数据模拟登录
+    // 用户名校验：不超过10位
+    validateUsername(rule, value, callback) {
+      if (value.length > 10) {
+        return callback(new Error('用户名不能超过10位'))
+      }
+      return callback()
+    },
+
+    // 密码校验：至少8位，包含字母和数字
+    validatePassword(rule, value, callback) {
+      const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/
+      if (!passwordRegex.test(value)) {
+        return callback(new Error('密码必须至少8位，且包含字母和数字'))
+      }
+      return callback()
+    },
+
+    // 邮箱校验：允许所有合法邮箱，包括 hust.edu.cn
+    validateEmail(rule, value, callback) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(value)) {
+        return callback(new Error('邮箱格式不正确'))
+      }
+      // 如果只允许 hust 邮箱，可以启用下面的逻辑：
+      // if (!value.endsWith('@hust.edu.cn')) {
+      //   return callback(new Error('必须使用 hust.edu.cn 邮箱'))
+      // }
+      return callback()
+    },
+
+    // 登录接口调用
     handleLogin() {
       this.$refs.loginFormRef.validate(valid => {
         if (valid) {
-          if (this.loginForm.username && this.loginForm.password) {
-            alert(`模拟登录成功：${this.loginForm.username}`)
-            this.$router.push('/home')
-          } else {
-            alert('请输入账号和密码')
-          }
+          login(this.loginForm)
+            .then(res => {
+              const token = res.data.token
+              localStorage.setItem('token', token)
+              this.$message.success('登录成功')
+              this.$router.push('/home')
+            })
+            .catch(() => {
+              this.$message.error('登录失败')
+            })
         }
       })
     },
-    // 前端假数据模拟注册
+
+    // 注册接口调用（假接口）
     handleRegister() {
       this.$refs.registerFormRef.validate(valid => {
         if (valid) {
-          alert(`模拟注册成功：${this.registerForm.username}`)
-          this.activeTab = 'login'
+          register(this.registerForm)
+            .then(res => {
+              this.$message.success(`注册成功：用户ID ${res.data.userId}`)
+              this.activeTab = 'login'
+            })
+            .catch(() => {
+              this.$message.error('注册失败')
+            })
         }
       })
     }
