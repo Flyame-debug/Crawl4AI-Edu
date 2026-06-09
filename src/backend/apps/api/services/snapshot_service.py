@@ -1,14 +1,17 @@
 """
-功能：业务逻辑服务层
-用途：封装核心业务逻辑，供 API 视图和 Celery 任务调用
-- 增量更新逻辑：对比 content_hash，相同跳过
-- 版本控制：内容变化时创建新版本
-调用方：views.py 和成员 A 的 Celery 任务
+文件名: snapshot_service.py
+作用: 网页快照业务逻辑服务，处理增量更新和版本控制
+主要功能:
+    1. 计算内容 SHA256 哈希值
+    2. 增量保存网页内容（对比哈希，相同跳过）
+    3. 内容变化时创建新版本记录
+    4. 根据 URL 自动判断分类（师资/课程/科研/其他）
+调用方: views.py 和成员 A 的 Celery 任务
 """
 
 import hashlib
 from django.utils import timezone
-from .models import PageSnapshot
+from apps.api.models import PageSnapshot
 
 
 class PageSnapshotService:

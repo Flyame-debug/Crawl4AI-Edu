@@ -45,6 +45,10 @@ wheels/
 .installed.cfg
 *.egg
 
+# .md
+CODEBUDDY.md
+B.md
+
 # 测试和覆盖率
 .pytest_cache/
 .coverage
