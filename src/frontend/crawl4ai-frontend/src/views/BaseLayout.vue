@@ -1,20 +1,27 @@
+<!--
+  BaseLayout.vue
+  网站整体布局组件，包含：
+  - 左侧导航栏（带可折叠 Logo：展开显示 EduSpider，折叠显示 E）
+  - 顶端栏（面包屑导航、用户信息）
+  - 主内容区（router-view）
+-->
+
 <template>
   <div class="base-layout">
     <!-- 左侧导航栏容器 -->
     <div class="sidebar" :class="{ collapsed: isCollapse }">
+      <!-- 顶部 Logo -->
+      <div class="sidebar-logo" @click="toggleCollapse">
+        <span v-if="!isCollapse">EduSpider</span>
+        <span v-else>E</span>
+      </div>
+
       <el-menu
         :default-active="$route.path"
         router
         class="el-menu-vertical"
         :collapse="isCollapse"
       >
-        <!-- 顶部 Logo -->
-        <div class="sidebar-logo" @click="toggleCollapse">
-          <span v-if="!isCollapse">教育数据采集平台</span>
-          <span v-else>E</span>
-        </div>
-
-        <!-- 菜单项 -->
         <el-menu-item index="/home">
           <el-icon><House /></el-icon>
           <span v-if="!isCollapse">首页</span>
@@ -46,7 +53,10 @@
     <div class="right-area">
       <!-- 顶端栏 -->
       <header class="top-bar">
+        <!-- 面包屑导航 -->
         <app-breadcrumb class="breadcrumb" />
+
+        <!-- 用户信息 -->
         <div class="user-info">
           <el-dropdown>
             <span class="el-dropdown-link">
@@ -108,16 +118,17 @@ export default {
 }
 .sidebar-logo {
   height: 60px;
-  line-height: 60px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-weight: bold;
+  font-size: 18px;
   cursor: pointer;
   border-bottom: 1px solid #ddd;
-  user-select: none;
 }
 .el-menu-vertical {
   border-right: none;
-  min-height: 100vh;
+  min-height: calc(100vh - 60px);
 }
 .sidebar.collapsed .el-menu-item span {
   display: none;

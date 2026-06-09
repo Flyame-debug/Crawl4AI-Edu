@@ -4,7 +4,6 @@
 
 import { createRouter, createWebHistory } from 'vue-router'
 
-// 导入页面视图
 import LoginRegister from '../views/LoginRegister.vue'
 import BaseLayout from '../views/BaseLayout.vue'
 import HomeView from '../views/HomeView.vue'
@@ -48,16 +47,16 @@ const routes = [
         meta: { breadcrumb: '模板页面' }
       },
       {
-        path: 'templates/:id',
-        name: 'TemplateDetail',
-        component: TemplateDetail,
-        meta: { breadcrumb: '模板详情' }
-      },
-      {
         path: 'templates/create',
         name: 'TemplateCreator',
         component: TemplateCreator,
         meta: { breadcrumb: '新建模板' }
+      },
+      {
+        path: 'templates/:id',
+        name: 'TemplateDetail',
+        component: TemplateDetail,
+        meta: { breadcrumb: '模板详情', parent: 'TemplateManager' }
       },
       {
         path: 'tasks',

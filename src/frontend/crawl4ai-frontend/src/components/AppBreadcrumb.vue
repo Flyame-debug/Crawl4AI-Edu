@@ -1,23 +1,11 @@
-/**
- * AppBreadcrumb.vue
- * 
- * 功能说明：
- * - 全局面包屑导航组件
- * - 根据当前路由的 matched 数组动态生成路径
- * - 优先显示路由配置中的 meta.breadcrumb 中文名字
- * - 如果没有配置 meta.breadcrumb，则显示路由的 name
- * 
- * 注意事项：
- * - 使用 computed 保证响应式更新
- */
-
 <template>
-  <el-breadcrumb separator=">">
+  <el-breadcrumb :separator="'>'">
     <el-breadcrumb-item
       v-for="(item, index) in breadcrumbItems"
       :key="index"
+      :to="item.path"
     >
-      {{ item.meta?.breadcrumb || item.name }}
+      {{ item.meta?.breadcrumb }}
     </el-breadcrumb-item>
   </el-breadcrumb>
 </template>
@@ -25,15 +13,24 @@
 <script>
 import { useRoute } from 'vue-router'
 import { computed } from 'vue'
+import router from '../router/index.js'
 
 export default {
   name: 'AppBreadcrumb',
   setup() {
     const route = useRoute()
-    // 响应式计算，每次路由变化都会更新
-    const breadcrumbItems = computed(() =>
-      route.matched.filter(r => r.meta && r.meta.breadcrumb)
-    )
+    const breadcrumbItems = computed(() => {
+      const matched = route.matched.filter(r => r.meta?.breadcrumb && r.path !== '/')
+      const current = matched[matched.length - 1]
+
+      // 如果是模板详情，手动插入父级“模板页面”
+      if (current?.name === 'TemplateDetail' && current.meta?.parent) {
+        const parentRoute = router.getRoutes().find(r => r.name === current.meta.parent)
+        if (parentRoute) return [parentRoute, current]
+      }
+
+      return matched
+    })
     return { breadcrumbItems }
   }
 }

@@ -1,12 +1,5 @@
 <template>
   <div class="template-detail">
-    <!-- 面包屑导航 -->
-    <el-breadcrumb separator=">">
-      <el-breadcrumb-item to="/home">首页</el-breadcrumb-item>
-      <el-breadcrumb-item to="/templates">模板页面</el-breadcrumb-item>
-      <el-breadcrumb-item>模板详情</el-breadcrumb-item>
-    </el-breadcrumb>
-
     <!-- 模板信息 -->
     <h2>{{ template.name }}</h2>
     <p>{{ template.description }}</p>
