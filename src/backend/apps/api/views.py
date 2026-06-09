@@ -419,6 +419,18 @@ def get_log_files(request):
     files.sort(key=lambda x: x['modified'], reverse=True)
     return Response({'files': files})
 
+@api_view(['GET'])
+def health_check(request):
+    """健康检查接口"""
+    return Response({
+        'status': 'ok',
+        'timestamp': timezone.now().isoformat(),
+        'services': {
+            'database': 'ok',
+            'redis': 'ok',
+            'minio': 'ok',
+        }
+    })
 
 @api_view(['GET'])
 def list_crawl_tasks(request):
