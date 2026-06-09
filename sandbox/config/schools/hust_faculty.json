@@ -1,0 +1,10 @@
+{
+  "allowed_domains": ["faculty.hust.edu.cn"],
+  "white_list_patterns": ["/\\w+/zh_CN/.*\\.htm", "/\\w+/en/.*\\.htm", "/info/\\d+/\\d+\\.htm"],
+  "need_render": false,
+  "request_delay": 2.0,
+  "concurrency": 2,
+  "max_depth": 1,
+  "timeout": 30,
+  "max_retries": 3
+}
