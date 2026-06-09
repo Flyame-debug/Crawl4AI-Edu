@@ -218,9 +218,27 @@ LOGGING = {
     },
 }
 
-# settings.py 添加
+# ============================================================
+# Celery 异步任务队列配置
+# ============================================================
 from celery.schedules import crontab
 
+# Broker 配置：使用 Redis 作为消息中间件（开发环境）
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+# 结果后端：也可使用 Redis
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+
+# 序列化配置
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Shanghai'
+
+# 任务配置
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 单任务最大执行时间 30 分钟
+
+# Beat 定时调度配置
 CELERY_BEAT_SCHEDULE = {
     'process-conversion': {
         'task': 'apps.api.tasks.process_conversion_task',
