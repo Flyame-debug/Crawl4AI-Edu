@@ -12,6 +12,7 @@ CLAUDE.md
 .claude/
 worklogs/
 sandbox/data/
+*.tar.gz
 
 # 虚拟环境
 venv/
