@@ -272,6 +272,7 @@ def get_crawler_config_from_db(request):
         'request_delay': 1.0,
         'max_depth': 2,
         'allowed_domains': [],
+        'default_allowed_domains': [],  # 新增：兼容成员A的本地配置
         'white_list_patterns': [],
         'enable_dead_check': False,
     }
@@ -279,6 +280,12 @@ def get_crawler_config_from_db(request):
     for key, default_value in default_config.items():
         if key not in config_dict:
             config_dict[key] = default_value
+    
+    # 确保 allowed_domains 和 default_allowed_domains 保持一致
+    if config_dict.get('allowed_domains') and not config_dict.get('default_allowed_domains'):
+        config_dict['default_allowed_domains'] = config_dict['allowed_domains']
+    elif config_dict.get('default_allowed_domains') and not config_dict.get('allowed_domains'):
+        config_dict['allowed_domains'] = config_dict['default_allowed_domains']
     
     return Response(config_dict)
 
