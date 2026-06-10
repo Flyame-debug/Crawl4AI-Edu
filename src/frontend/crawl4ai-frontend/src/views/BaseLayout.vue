@@ -1,9 +1,9 @@
 <!--
   BaseLayout.vue
   网站整体布局组件，包含：
-  - 左侧导航栏（带可折叠 Logo：展开显示 EduSpider，折叠显示 E）
-  - 顶端栏（面包屑导航、用户信息）
-  - 主内容区（router-view）
+  - 左侧导航栏（固定，带可折叠 Logo：展开显示 EduSpider，折叠显示 E）
+  - 顶端栏（固定，面包屑导航、用户信息）
+  - 主内容区（router-view，可滚动）
 -->
 
 <template>
@@ -108,10 +108,17 @@ export default {
   display: flex;
   height: 100vh;
 }
+
+/* 左侧导航栏固定 */
 .sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 200px;
   transition: width 0.3s;
   border-right: 1px solid #ddd;
+  background-color: #fff;
 }
 .sidebar.collapsed {
   width: 64px;
@@ -133,19 +140,29 @@ export default {
 .sidebar.collapsed .el-menu-item span {
   display: none;
 }
+
+/* 右侧区域整体偏移 */
 .right-area {
+  margin-left: 200px; /* 与 sidebar 宽度保持一致 */
   flex: 1;
   display: flex;
   flex-direction: column;
 }
+
+/* 顶栏固定在右侧区域顶部 */
 .top-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  position: fixed;
+  top: 0;
+  left: 200px; /* 与 sidebar 对齐 */
+  right: 0;
   height: 60px;
   background-color: #f5f7fa;
   border-bottom: 1px solid #ddd;
   padding: 0 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 1000;
 }
 .breadcrumb {
   flex: 1;
@@ -156,9 +173,22 @@ export default {
   align-items: center;
   cursor: pointer;
 }
+
+/* 内容区滚动，顶栏高度留出 */
 .content {
-  flex: 1;
+  margin-top: 60px; /* 留出顶栏空间 */
   padding: 20px;
-  overflow-y: auto;
+}
+
+/* ✅ 全局隐藏滚动条但保留滚动功能 */
+html, body {
+  overflow-y: scroll;   /* 保留纵向滚动 */
+}
+::-webkit-scrollbar {
+  display: none;        /* Chrome / Edge / Safari 隐藏滚动条 */
+}
+body {
+  scrollbar-width: none; /* Firefox 隐藏滚动条 */
+  -ms-overflow-style: none; /* IE / Edge (旧版) 隐藏滚动条 */
 }
 </style>

@@ -17,16 +17,20 @@
       </template>
     </el-input>
 
-    <!-- 模板列表 -->
-    <el-row :gutter="20" class="template-list">
-      <el-col :span="8" v-for="template in filteredTemplates" :key="template.id">
-        <el-card shadow="hover" @dblclick="openDetail(template)">
-          <h3>{{ template.name }}</h3>
-          <p>{{ template.description }}</p>
-          <p class="hint">💡 双击进入详情</p>
-        </el-card>
-      </el-col>
-    </el-row>
+    <!-- 模板列表（页面整体滚动） -->
+    <div class="template-list">
+      <el-row :gutter="20" style="flex-wrap: wrap;">
+        <el-col :span="8" v-for="template in templates" :key="template.id">
+          <el-card shadow="hover" @dblclick="openDetail(template)">
+            <h3>{{ template.name }}</h3>
+            <p>{{ template.description }}</p>
+            <p class="hint">💡 双击进入详情</p>
+          </el-card>
+        </el-col>
+      </el-row>
+      <p v-if="loading" class="loading">加载中...</p>
+      <p v-if="noMore" class="no-more">没有更多模板了</p>
+    </div>
 
     <!-- 底部提示 -->
     <div class="new-template-hint">
@@ -38,6 +42,7 @@
 
 <script>
 import { Search } from '@element-plus/icons-vue'
+import { getTemplates } from '@/api/templates'
 
 export default {
   name: 'TemplateManager',
@@ -48,31 +53,55 @@ export default {
       templates: [
         { id: 1, name: '课程信息采集', description: '采集高校课程相关网页内容' },
         { id: 2, name: '教师主页采集', description: '采集教师个人主页信息' },
-        { id: 3, name: '科研成果采集', description: '采集科研论文与项目数据' }
-      ]
-    }
-  },
-  computed: {
-    filteredTemplates() {
-      if (!this.searchQuery) return this.templates
-      return this.templates.filter(t =>
-        t.name.includes(this.searchQuery) || t.description.includes(this.searchQuery)
-      )
+        { id: 3, name: '科研成果采集', description: '采集科研论文与项目数据' },
+        { id: 4, name: '招生信息采集', description: '采集高校招生简章与政策' },
+        { id: 5, name: '学术会议采集', description: '采集学术会议通知与日程' },
+        { id: 6, name: '实验室信息采集', description: '采集实验室成员与研究方向' }
+      ],
+      page: 1,
+      pageSize: 6,
+      loading: false,
+      noMore: false
     }
   },
   mounted() {
-    // 接收新建模板数据
-    if (this.$route.query.newTemplate) {
-      try {
-        const newTemplate = JSON.parse(this.$route.query.newTemplate)
-        this.addTemplate(newTemplate)
-        this.$message.success(`新模板【${newTemplate.name}】已添加`)
-      } catch (e) {
-        console.error('解析新模板失败', e)
-      }
-    }
+    this.fetchTemplates()
+    window.addEventListener('scroll', this.handleScroll)
+  },
+  beforeUnmount() {
+    window.removeEventListener('scroll', this.handleScroll)
   },
   methods: {
+    async fetchTemplates() {
+      if (this.loading || this.noMore) return
+      this.loading = true
+      try {
+        const res = await getTemplates({ page: this.page, pageSize: this.pageSize, search: this.searchQuery })
+        if (res.data && res.data.results && res.data.results.length) {
+          if (this.page === 1) {
+            this.templates = res.data.results
+          } else {
+            this.templates = [...this.templates, ...res.data.results]
+          }
+          if (res.data.results.length < this.pageSize) {
+            this.noMore = true
+          }
+          this.page++
+        } else if (this.page === 1) {
+          this.$message.info('后端暂无数据，显示默认模板')
+        }
+      } catch (e) {
+        this.$message.error('获取模板列表失败（当前显示默认卡片）')
+      } finally {
+        this.loading = false
+      }
+    },
+    handleScroll() {
+      const { scrollTop, clientHeight, scrollHeight } = document.documentElement
+      if (scrollTop + clientHeight >= scrollHeight - 10) {
+        this.fetchTemplates()
+      }
+    },
     openDetail(template) {
       this.$router.push(`/templates/${template.id}`)
     },
@@ -80,15 +109,17 @@ export default {
       this.$router.push('/templates/create')
     },
     doSearch() {
-      if (!this.searchQuery.trim()) {
-        this.$message.warning('请输入搜索关键词')
-        return
-      }
-      this.$message.info(`正在搜索：${this.searchQuery}`)
-    },
-    addTemplate(newTemplate) {
-      const nextId = this.templates.length + 1
-      this.templates.push({ id: nextId, ...newTemplate })
+      this.page = 1
+      this.noMore = false
+      this.templates = [
+        { id: 1, name: '课程信息采集', description: '采集高校课程相关网页内容' },
+        { id: 2, name: '教师主页采集', description: '采集教师个人主页信息' },
+        { id: 3, name: '科研成果采集', description: '采集科研论文与项目数据' },
+        { id: 4, name: '招生信息采集', description: '采集高校招生简章与政策' },
+        { id: 5, name: '学术会议采集', description: '采集学术会议通知与日程' },
+        { id: 6, name: '实验室信息采集', description: '采集实验室成员与研究方向' }
+      ]
+      this.fetchTemplates()
     }
   }
 }
@@ -104,6 +135,10 @@ export default {
 }
 .template-list {
   margin-top: 20px;
+  /* 不再限制高度和滚动，由页面整体滚动 */
+}
+.template-list .el-col {
+  margin-bottom: 20px;
 }
 .el-card {
   cursor: pointer;
@@ -117,6 +152,12 @@ export default {
   font-size: 12px;
   color: #888;
   margin-top: 10px;
+}
+.loading,
+.no-more {
+  text-align: center;
+  margin: 10px 0;
+  color: #666;
 }
 .new-template-hint {
   text-align: right;

@@ -22,7 +22,7 @@ const routes = [
     path: '/auth',
     name: 'Auth',
     component: LoginRegister,
-    meta: { breadcrumb: '登录注册' }
+    meta: { breadcrumb: '登录注册', public: true } // 标记为公开路由
   },
   {
     path: '/',
@@ -71,6 +71,17 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+// ✅ 路由守卫：检查 token
+router.beforeEach((to, from, next) => {
+  const token = localStorage.getItem('token')
+  if (!to.meta.public && !token) {
+    // 没有 token 且访问的不是公开路由，跳转到登录页
+    next('/auth')
+  } else {
+    next()
+  }
 })
 
 export default router

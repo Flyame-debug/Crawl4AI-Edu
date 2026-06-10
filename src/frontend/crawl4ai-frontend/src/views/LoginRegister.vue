@@ -29,6 +29,12 @@
             </el-form-item>
             <el-form-item label="邮箱" prop="email">
               <el-input v-model="registerForm.email" placeholder="请输入邮箱"></el-input>
+              <el-button type="primary" @click="handleSendCode" style="margin-top: 10px;">
+                发送验证码
+              </el-button>
+            </el-form-item>
+            <el-form-item label="验证码" prop="email_code">
+              <el-input v-model="registerForm.email_code" placeholder="请输入邮箱验证码"></el-input>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" @click="handleRegister">注册</el-button>
@@ -42,7 +48,7 @@
 </template>
 
 <script>
-import { login, register } from '../api/auth'
+import { login, register, sendEmailCode } from '../api/auth'
 
 export default {
   name: 'LoginRegisterPage',
@@ -50,7 +56,8 @@ export default {
     return {
       activeTab: 'login',
       loginForm: { username: '', password: '' },
-      registerForm: { username: '', password: '', email: '' },
+      registerForm: { username: '', password: '', email: '', email_code: '' },
+      userInfo: { username: '默认用户', email: 'default@example.com', token: 'default-token' },
       loginRules: {
         username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
         password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
@@ -67,51 +74,55 @@ export default {
         email: [
           { required: true, message: '请输入邮箱', trigger: 'blur' },
           { validator: this.validateEmail, trigger: 'blur' }
+        ],
+        email_code: [
+          { required: true, message: '请输入验证码', trigger: 'blur' }
         ]
       }
     }
   },
   methods: {
-    // 用户名校验：不超过10位
     validateUsername(rule, value, callback) {
-      if (value.length > 10) {
-        return callback(new Error('用户名不能超过10位'))
-      }
+      if (value.length > 10) return callback(new Error('用户名不能超过10位'))
       return callback()
     },
-
-    // 密码校验：至少8位，包含字母和数字
     validatePassword(rule, value, callback) {
-      const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/
-      if (!passwordRegex.test(value)) {
-        return callback(new Error('密码必须至少8位，且包含字母和数字'))
-      }
+      const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/
+      if (!regex.test(value)) return callback(new Error('密码必须至少8位，且包含字母和数字'))
       return callback()
     },
-
-    // 邮箱校验：允许所有合法邮箱，包括 hust.edu.cn
     validateEmail(rule, value, callback) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-      if (!emailRegex.test(value)) {
-        return callback(new Error('邮箱格式不正确'))
-      }
-      // 如果只允许 hust 邮箱，可以启用下面的逻辑：
-      // if (!value.endsWith('@hust.edu.cn')) {
-      //   return callback(new Error('必须使用 hust.edu.cn 邮箱'))
-      // }
+      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!regex.test(value)) return callback(new Error('邮箱格式不正确'))
       return callback()
     },
 
-    // 登录接口调用
+    // 登录：先显示默认数据，再覆盖
     handleLogin() {
       this.$refs.loginFormRef.validate(valid => {
         if (valid) {
+          // 默认数据先写入
+          this.userInfo = {
+            username: this.loginForm.username || '默认用户',
+            email: 'default@example.com',
+            token: 'default-token'
+          }
+          localStorage.setItem('token', this.userInfo.token)
+          localStorage.setItem('username', this.userInfo.username)
+          localStorage.setItem('email', this.userInfo.email)
+          this.$message.success('登录成功（默认数据）')
+          this.$router.push('/home')
+
+          // 真接口覆盖
           login(this.loginForm)
             .then(res => {
-              const token = res.data.token
-              localStorage.setItem('token', token)
-              this.$message.success('登录成功')
-              this.$router.push('/home')
+              if (res.data.success) {
+                this.userInfo = res.data.user
+                localStorage.setItem('token', res.data.token)
+                localStorage.setItem('username', res.data.user.username)
+                localStorage.setItem('email', res.data.user.email)
+                this.$message.success('登录成功（后端数据覆盖）')
+              }
             })
             .catch(() => {
               this.$message.error('登录失败')
@@ -120,20 +131,43 @@ export default {
       })
     },
 
-    // 注册接口调用（假接口）
+    // 注册：先提示默认，再覆盖
     handleRegister() {
       this.$refs.registerFormRef.validate(valid => {
         if (valid) {
+          this.$message.success(`注册成功（默认用户）`)
+          this.activeTab = 'login'
+
           register(this.registerForm)
             .then(res => {
-              this.$message.success(`注册成功：用户ID ${res.data.userId}`)
-              this.activeTab = 'login'
+              if (res.data.success) {
+                this.$message.success(res.data.message || `注册成功：用户ID ${res.data.userId}`)
+                this.activeTab = 'login'
+              }
             })
             .catch(() => {
               this.$message.error('注册失败')
             })
         }
       })
+    },
+
+    // 发送验证码
+    handleSendCode() {
+      if (!this.registerForm.email) {
+        this.$message.error('请先输入邮箱')
+        return
+      }
+      this.$message.success('验证码已发送（默认提示）')
+      sendEmailCode({ email: this.registerForm.email })
+        .then(res => {
+          if (res.data.success) {
+            this.$message.success(res.data.message || '验证码已发送（后端数据覆盖）')
+          }
+        })
+        .catch(() => {
+          this.$message.error('发送失败')
+        })
     }
   }
 }

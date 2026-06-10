@@ -13,7 +13,12 @@
         <el-input v-model="description" type="textarea" placeholder="请输入模板简介" />
       </el-form-item>
 
-      <!-- 提示词输入区 -->
+      <!-- 种子URL -->
+      <el-form-item label="种子URL">
+        <el-input v-model="seedUrl" placeholder="请输入种子URL" />
+      </el-form-item>
+
+      <!-- AI提示词（多个输入框） -->
       <div class="prompt-inputs">
         <el-form-item
           v-for="(prompt, index) in prompts"
@@ -22,11 +27,11 @@
         >
           <el-input
             v-model="prompts[index]"
-            maxlength="8"
+            maxlength="20"
             show-word-limit
             placeholder="请输入提示词"
           />
-          <small class="hint">请输入名词</small>
+          <small class="hint">请输入名词或短语</small>
         </el-form-item>
       </div>
     </el-form>
@@ -40,33 +45,41 @@
 </template>
 
 <script>
+import { createTemplate } from '@/api/templates'
+
 export default {
   name: 'TemplateCreator',
   data() {
     return {
       title: '',
       description: '',
-      prompts: ['', '', '', '', ''] // 五个输入框
+      seedUrl: '',
+      prompts: ['', '', '', '', ''] // 五个提示词输入框
     }
   },
   methods: {
-    saveTemplate() {
-      if (!this.title.trim()) {
-        this.$message.error('模板标题不能为空')
+    async saveTemplate() {
+      if (!this.title.trim() || !this.seedUrl.trim()) {
+        this.$message.error('模板标题和种子URL不能为空')
         return
       }
+
       const newTemplate = {
         name: this.title,
+        seed_url: this.seedUrl,
+        tags: this.prompts.filter(p => p.trim() !== ''), // 多个提示词数组
         description: this.description || '暂无简介'
       }
-      console.log('保存的提示词:', this.prompts)
 
-      this.$message.success('模板已保存！')
-      // 跳转并传递新模板数据
-      this.$router.push({
-        path: '/templates',
-        query: { newTemplate: JSON.stringify(newTemplate) }
-      })
+      try {
+        const res = await createTemplate(newTemplate)
+        if (res.data && res.data.id) {
+          this.$message.success(`模板【${res.data.name}】已创建`)
+          this.$router.push('/templates')
+        }
+      } catch (e) {
+        this.$message.error('模板创建失败')
+      }
     },
     goBack() {
       this.$router.push('/templates')
