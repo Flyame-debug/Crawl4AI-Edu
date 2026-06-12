@@ -1,0 +1,7 @@
+{
+  "default_allowed_domains": [],
+  "white_list_patterns": [".*"],
+  "concurrency": 5,
+  "request_delay": 1.0,
+  "max_depth": 2
+}
