@@ -98,6 +98,18 @@ Examples:
         "--no-graceful", action="store_true", default=False,
         help="Disable graceful shutdown on SIGINT/SIGTERM (default: enabled).",
     )
+    parser.add_argument(
+        "--seed-list", default=None,
+        help="Path to a text file with one seed URL per line (local mode).",
+    )
+    parser.add_argument(
+        "--output-dir", default="sandbox/data",
+        help="Directory for HTML and image output (default: sandbox/data).",
+    )
+    parser.add_argument(
+        "--depth", dest="depth_override", type=int, default=None,
+        help="Maximum BFS depth (overrides positional max_depth).",
+    )
     return parser
 
 
@@ -149,20 +161,35 @@ async def _main() -> None:
         return
 
     # Local mode (backward compatible).
+    # Read seed list file if provided.
+    seed_urls: list[str] | None = None
+    if args.seed_list:
+        seed_path = Path(args.seed_list)
+        if not seed_path.is_file():
+            print(f"Error: seed-list file not found: {args.seed_list}")
+            sys.exit(1)
+        seed_urls = [line.strip() for line in seed_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        print(f"Loaded {len(seed_urls)} seed URLs from {args.seed_list}")
+        effective_seed = seed_urls[0] if seed_urls else None
+
     if not effective_seed:
         if use_api:
             print("Error: --use-api requires a seed URL (via --seed or positional argument).")
         else:
             print("Usage: python sandbox/run_crawler.py <seed_url> [max_depth] [config_path]")
+            print("       python sandbox/run_crawler.py --seed-list <file> [--output-dir <dir>]")
             print("       python sandbox/run_crawler.py --worker")
             print("       python sandbox/run_crawler.py --use-api --seed <url>")
         sys.exit(1)
 
-    print(f"Starting local crawl: seed={effective_seed} max_depth={args.max_depth or 'auto'}")
+    depth = args.depth_override if args.depth_override is not None else args.max_depth
+    print(f"Starting local crawl: seed={effective_seed} max_depth={depth or 'auto'}")
     stats = await crawl(
         seed_url=effective_seed,
-        max_depth=args.max_depth,
+        max_depth=depth,
         config_path=args.config_path,
+        seed_urls=seed_urls,
+        output_dir=args.output_dir,
     )
     print(stats.report())
 
