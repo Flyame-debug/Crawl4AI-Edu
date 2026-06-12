@@ -167,24 +167,26 @@ export default {
         this.$message.error('模板更新失败')
       }
     },
+
     async handleCollect() {
-  console.log('开始采集，模板ID:', this.$route.params.id)
-  try {
-    const res = await startTask({ 
-      template_id: this.$route.params.id, 
-      config: { max_depth: 3, max_concurrent: 5 } 
-    })
-    console.log('启动响应:', res.data)
-    this.taskId = res.data.task_id
-    this.collectState = 'collecting'
-    this.$message.success(res.data.message || '任务已启动')
-    this.fetchPreview()
-    this.startProgressPolling()
-  } catch (e) {
-    console.error('启动失败:', e)
-    this.$message.error('启动采集任务失败')
-  }
-}
+      console.log('开始采集，模板ID:', this.$route.params.id)
+      try {
+        const res = await startTask({ 
+          template_id: this.$route.params.id, 
+          config: { max_depth: 3, max_concurrent: 5 } 
+        })
+        console.log('启动响应:', res.data)
+        this.taskId = res.data.task_id
+        this.collectState = 'collecting'
+        this.$message.success(res.data.message || '任务已启动')
+        this.fetchPreview()
+        this.startProgressPolling()
+      } catch (e) {
+        console.error('启动失败:', e)
+        this.$message.error('启动采集任务失败')
+      }
+    },
+
     async pauseCollect() {
       if (!this.taskId) return
       try {
@@ -196,6 +198,7 @@ export default {
         this.$message.error('暂停任务失败')
       }
     },
+
     async endCollect() {
       if (!this.taskId) return
       try {
@@ -210,6 +213,7 @@ export default {
         this.$message.error('停止任务失败')
       }
     },
+
     async fetchPreview() {
       if (!this.taskId) return
       try {
@@ -221,85 +225,42 @@ export default {
         this.$message.error('获取采集数据预览失败')
       }
     },
+
     startProgressPolling() {
-  if (this.progressTimer) clearInterval(this.progressTimer)
-  this.progressTimer = setInterval(async () => {
-    if (!this.taskId || this.collectState !== 'collecting') return
-    try {
-      const res = await getTaskProgress(this.taskId)
-      console.log('进度更新:', res.data)  // 添加日志
-      
-      if (res.data) {
-        this.progress = res.data.percent || 0
-        this.progressMessage = res.data.message || ''
-        
-        // ✅ 关键修复：检查任务是否已完成或失败
-        if (res.data.status === 'completed') {
-          this.collectState = 'idle'
-          this.progress = 100
-          this.progressMessage = '采集完成！'
-          clearInterval(this.progressTimer)
-          this.$message.success('采集任务已完成')
-          this.fetchPreview()  // 刷新预览数据
-        } else if (res.data.status === 'failed') {
-          this.collectState = 'idle'
-          clearInterval(this.progressTimer)
-          this.$message.error('采集任务失败: ' + (res.data.message || '未知错误'))
-        } else if (res.data.status === 'stopped') {
-          this.collectState = 'idle'
-          clearInterval(this.progressTimer)
-          this.$message.info('采集任务已停止')
+      if (this.progressTimer) clearInterval(this.progressTimer)
+      this.progressTimer = setInterval(async () => {
+        if (!this.taskId || this.collectState !== 'collecting') return
+        try {
+          const res = await getTaskProgress(this.taskId)
+          console.log('进度更新:', res.data)
+          
+          if (res.data) {
+            this.progress = res.data.percent || 0
+            this.progressMessage = res.data.message || ''
+            
+            if (res.data.status === 'completed') {
+              this.collectState = 'idle'
+              this.progress = 100
+              this.progressMessage = '采集完成！'
+              clearInterval(this.progressTimer)
+              this.$message.success('采集任务已完成')
+              this.fetchPreview()
+            } else if (res.data.status === 'failed') {
+              this.collectState = 'idle'
+              clearInterval(this.progressTimer)
+              this.$message.error('采集任务失败')
+              this.fetchPreview()
+            } else if (res.data.status === 'stopped') {
+              this.collectState = 'idle'
+              clearInterval(this.progressTimer)
+              this.$message.info('采集任务已停止')
+            }
+          }
+        } catch (e) {
+          console.error('获取任务进度失败:', e)
         }
-      }
-    } catch (e) {
-      console.error('获取任务进度失败:', e)
+      }, 3000)
     }
-  }, 3000)  // 改为3秒轮询，响应更快
-}
   }
 }
 </script>
-
-<style scoped>
-.template-detail {
-  padding: 20px;
-}
-.subtitle {
-  font-size: 14px;
-  color: #666;
-  margin-bottom: 20px;
-}
-.collect-buttons {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-.edit-actions {
-  margin-top: 20px;
-  display: flex;
-  gap: 10px;
-}
-.prompt-inputs {
-  margin-top: 20px;
-}
-.hint {
-  font-size: 12px;
-  color: #888;
-}
-section {
-  margin-top: 20px;
-}
-.progress {
-  margin-top: 20px;
-}
-.preview {
-  margin-top: 20px;
-}
-.notes {
-  margin-top: 20px;
-}
-.usage {
-  margin-top: 20px;
-}
-</style>
