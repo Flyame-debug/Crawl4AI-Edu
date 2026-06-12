@@ -1,3 +1,4 @@
+# Python 项目相关
 eduenv/
 __pycache__/
 *.pyc
@@ -132,3 +133,6 @@ models/
 tmp/
 temp/
 *.tmp
+# Node.js / 前端相关
+node_modules/
+dist/
