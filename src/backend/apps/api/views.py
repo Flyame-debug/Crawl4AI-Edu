@@ -19,7 +19,9 @@ import base64
 from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask
 from .serializers import PageSnapshotSerializer, SeedURLSerializer
 from .services.snapshot_service import PageSnapshotService
-
+# 在文件顶部已有的导入后面添加
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 
 # ==================== PageSnapshot 视图 ====================
 
@@ -1112,3 +1114,15 @@ def get_dashboard_stats(request):
             'is_healthy': field_completeness >= 80 and success_rate >= 90,
         }
     })
+    
+    
+# views.py 中添加
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def send_email_code(request):
+    email = request.data.get('email')
+    if not email:
+        return Response({'success': False, 'message': '邮箱不能为空'}, status=400)
+    # TODO: 实际发送邮件逻辑
+    # 联调阶段可临时返回固定验证码 123456
+    return Response({'success': True, 'message': '验证码已发送（联调测试码：123456）'})

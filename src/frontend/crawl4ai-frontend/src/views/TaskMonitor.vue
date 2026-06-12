@@ -111,38 +111,11 @@ export default {
   components: { MoreFilled },
   data() {
     return {
-      tasks: [
-        // 保留原有任务示例数据
-        { task_id: 'demo-1', task_name: '清华大学教师采集_20260604', status: '进行中', duration: '00:03:25', progress: '30/100', progress_percent: 30 },
-        { task_id: 'demo-2', task_name: '北京大学课程采集_20260603', status: '已完成', duration: '00:15:30', progress: '100/100', progress_percent: 100 },
-        { task_id: 'demo-3', task_name: '复旦教师采集_20260602', status: '错误退出', duration: '00:02:00', error_message: '网络连接失败' },
-        { task_id: 'demo-4', task_name: '上海交大课程采集_20260601', status: '已暂停', duration: '00:05:20', progress: '50/100', progress_percent: 50 }
-      ],
+      tasks: [],
       snapshotVisible: false,
       filters: { category: '', search: '' },
       // 新增：测试数据（后端覆盖）
-      pages: [
-        {
-          id: 1,
-          url: 'https://www.tsinghua.edu.cn/teacher/zhang',
-          category: '师资',
-          task_id: 'demo-2',
-          task_name: '北京大学课程采集',
-          markdown: '<h3>张三教授</h3><p>研究方向：人工智能</p>',
-          images: ['http://127.0.0.1:9000/images/abc.jpg'],
-          created_at: '2026-06-04T10:00:00Z'
-        },
-        {
-          id: 2,
-          url: 'https://www.tsinghua.edu.cn/course/ai',
-          category: '课程',
-          task_id: 'demo-2',
-          task_name: '北京大学课程采集',
-          markdown: '<h3>人工智能课程</h3><p>主讲教师：李四</p>',
-          images: [],
-          created_at: '2026-06-04T11:00:00Z'
-        }
-      ]
+      pages: []
     }
   },
   computed: {
