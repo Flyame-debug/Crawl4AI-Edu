@@ -151,3 +151,5 @@ tests/
 *.bat
 src/backend/test.jpg
 src/backend/test_image_base64.txt
+course_pages.json
+get_training_data.py

@@ -19,8 +19,15 @@ import base64
 from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask
 from .serializers import PageSnapshotSerializer, SeedURLSerializer
 from .services.snapshot_service import PageSnapshotService
+# 在文件顶部已有的导入后面添加
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 
-
+# 添加 sandbox 到 Python 路径
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent  # 指向 E:\Crawl4AI
+sandbox_path = PROJECT_ROOT / "sandbox"
+if str(sandbox_path) not in sys.path:
+    sys.path.insert(0, str(sandbox_path))
 # ==================== PageSnapshot 视图 ====================
 
 class PageSnapshotViewSet(viewsets.ModelViewSet):
@@ -490,6 +497,19 @@ if str(sandbox_path) not in sys.path:
 def run_async_crawl(task_id, seed_url, max_depth, config):
     """在独立线程中运行异步爬虫"""
     try:
+        import sys
+        from pathlib import Path
+        
+        # ✅ 在线程内部重新计算并添加路径
+        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+        sandbox_path = PROJECT_ROOT / "sandbox"
+        if str(sandbox_path) not in sys.path:
+            sys.path.insert(0, str(sandbox_path))
+        
+        # 调试：打印路径
+        print(f"线程内 sys.path 包含 sandbox: {any('sandbox' in p for p in sys.path)}")
+        print(f"sandbox_path: {sandbox_path}")
+        
         import django
         django.setup()
         
@@ -498,8 +518,11 @@ def run_async_crawl(task_id, seed_url, max_depth, config):
         
         CrawlTask.objects.filter(task_id=task_id).update(status='running')
         
-        from sandbox.standalone_crawler import crawl as run_crawl
+        # ✅ 现在导入
+        from standalone_crawler.crawler import crawl as run_crawl
         import asyncio
+        
+        print(f"🚀 爬虫线程启动: task_id={task_id}, seed_url={seed_url}")
         
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -514,6 +537,8 @@ def run_async_crawl(task_id, seed_url, max_depth, config):
         ))
         loop.close()
         
+        print(f"✅ 爬虫完成: 总数={stats.total}, 成功={stats.success}")
+        
         CrawlTask.objects.filter(task_id=task_id).update(
             status='completed',
             total_pages=stats.total,
@@ -524,12 +549,14 @@ def run_async_crawl(task_id, seed_url, max_depth, config):
         )
         
     except Exception as e:
+        import traceback
+        print(f"❌ 爬虫异常: {e}")
+        traceback.print_exc()
         CrawlTask.objects.filter(task_id=task_id).update(
             status='failed',
             error_message=str(e),
             traceback=traceback.format_exc()
         )
-
 
 @api_view(['POST'])
 def start_crawl(request):
@@ -751,7 +778,12 @@ def start_task(request):
     config = request.data.get('config', {})
     
     from .models import Template, CrawlTask
-    
+    import sys
+    from pathlib import Path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+    sandbox_path = PROJECT_ROOT / "sandbox"
+    if str(sandbox_path) not in sys.path:
+        sys.path.insert(0, str(sandbox_path))
     template_name = None
     if template_id:
         try:
@@ -1112,3 +1144,15 @@ def get_dashboard_stats(request):
             'is_healthy': field_completeness >= 80 and success_rate >= 90,
         }
     })
+    
+    
+# views.py 中添加
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def send_email_code(request):
+    email = request.data.get('email')
+    if not email:
+        return Response({'success': False, 'message': '邮箱不能为空'}, status=400)
+    # TODO: 实际发送邮件逻辑
+    # 联调阶段可临时返回固定验证码 123456
+    return Response({'success': True, 'message': '验证码已发送（联调测试码：123456）'})
