@@ -500,7 +500,7 @@ def run_async_crawl(task_id, seed_url, max_depth, config):
         
         CrawlTask.objects.filter(task_id=task_id).update(status='running')
         
-        from sandbox.standalone_crawler import crawl as run_crawl
+        from sandbox.standalone_crawler.crawler import crawl as run_crawl
         import asyncio
         
         loop = asyncio.new_event_loop()
