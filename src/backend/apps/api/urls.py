@@ -60,5 +60,5 @@ urlpatterns = [
     # ==================== 仪表盘统计 ====================
     path('stats/', views.get_dashboard_stats, name='dashboard_stats'),
     path('health/', views.health_check, name='health_check'),#健康检查接口
-
+    path('auth/send-code/', views.send_email_code, name='send_email_code'),
 ]

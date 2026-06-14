@@ -57,7 +57,6 @@ export default {
       activeTab: 'login',
       loginForm: { username: '', password: '' },
       registerForm: { username: '', password: '', email: '', email_code: '' },
-      userInfo: { username: '默认用户', email: 'default@example.com', token: 'default-token' },
       loginRules: {
         username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
         password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
@@ -97,77 +96,102 @@ export default {
       return callback()
     },
 
-    // 登录：先显示默认数据，再覆盖
-    handleLogin() {
-      this.$refs.loginFormRef.validate(valid => {
+    async handleLogin() {
+      this.$refs.loginFormRef.validate(async (valid) => {
         if (valid) {
-          // 默认数据先写入
-          this.userInfo = {
-            username: this.loginForm.username || '默认用户',
-            email: 'default@example.com',
-            token: 'default-token'
+          const loading = this.$loading({
+            lock: true,
+            text: '登录中...',
+            spinner: 'el-icon-loading',
+            background: 'rgba(0, 0, 0, 0.7)'
+          })
+          
+          try {
+            const res = await login(this.loginForm)
+            if (res.data.success) {
+              localStorage.setItem('token', res.data.token)
+              localStorage.setItem('username', res.data.user.username)
+              localStorage.setItem('email', res.data.user.email)
+              localStorage.setItem('userId', res.data.user.id)
+              
+              this.$message.success('登录成功')
+              this.$router.push('/home')
+            } else {
+              this.$message.error(res.data.error || '登录失败')
+            }
+          } catch (error) {
+            console.error('登录错误:', error)
+            this.$message.error('登录失败，请检查用户名和密码')
+          } finally {
+            loading.close()
           }
-          localStorage.setItem('token', this.userInfo.token)
-          localStorage.setItem('username', this.userInfo.username)
-          localStorage.setItem('email', this.userInfo.email)
-          this.$message.success('登录成功（默认数据）')
-          this.$router.push('/home')
-
-          // 真接口覆盖
-          login(this.loginForm)
-            .then(res => {
-              if (res.data.success) {
-                this.userInfo = res.data.user
-                localStorage.setItem('token', res.data.token)
-                localStorage.setItem('username', res.data.user.username)
-                localStorage.setItem('email', res.data.user.email)
-                this.$message.success('登录成功（后端数据覆盖）')
-              }
-            })
-            .catch(() => {
-              this.$message.error('登录失败')
-            })
         }
       })
     },
 
-    // 注册：先提示默认，再覆盖
-    handleRegister() {
-      this.$refs.registerFormRef.validate(valid => {
+    async handleRegister() {
+      this.$refs.registerFormRef.validate(async (valid) => {
         if (valid) {
-          this.$message.success(`注册成功（默认用户）`)
-          this.activeTab = 'login'
-
-          register(this.registerForm)
-            .then(res => {
-              if (res.data.success) {
-                this.$message.success(res.data.message || `注册成功：用户ID ${res.data.userId}`)
-                this.activeTab = 'login'
-              }
-            })
-            .catch(() => {
-              this.$message.error('注册失败')
-            })
+          const loading = this.$loading({
+            lock: true,
+            text: '注册中...',
+            spinner: 'el-icon-loading',
+            background: 'rgba(0, 0, 0, 0.7)'
+          })
+          
+          try {
+            const res = await register(this.registerForm)
+            if (res.data.success) {
+              this.$message.success(res.data.message || '注册成功，请登录')
+              this.registerForm = { username: '', password: '', email: '', email_code: '' }
+              this.activeTab = 'login'
+            } else {
+              this.$message.error(res.data.error || res.data.message || '注册失败')
+            }
+          } catch (error) {
+            console.error('注册错误:', error)
+            const errorMsg = error.response?.data?.error || error.response?.data?.message || '注册失败，请稍后重试'
+            this.$message.error(errorMsg)
+          } finally {
+            loading.close()
+          }
         }
       })
     },
 
-    // 发送验证码
-    handleSendCode() {
+    async handleSendCode() {
       if (!this.registerForm.email) {
         this.$message.error('请先输入邮箱')
         return
       }
-      this.$message.success('验证码已发送（默认提示）')
-      sendEmailCode({ email: this.registerForm.email })
-        .then(res => {
-          if (res.data.success) {
-            this.$message.success(res.data.message || '验证码已发送（后端数据覆盖）')
-          }
-        })
-        .catch(() => {
-          this.$message.error('发送失败')
-        })
+      
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(this.registerForm.email)) {
+        this.$message.error('邮箱格式不正确')
+        return
+      }
+      
+      const loading = this.$loading({
+        lock: true,
+        text: '发送中...',
+        spinner: 'el-icon-loading',
+        background: 'rgba(0, 0, 0, 0.7)'
+      })
+      
+      try {
+        const res = await sendEmailCode({ email: this.registerForm.email })
+        if (res.data.success) {
+          this.$message.success(res.data.message || '验证码已发送')
+          this.registerForm.email_code = '123456'
+        } else {
+          this.$message.error(res.data.message || '发送失败')
+        }
+      } catch (error) {
+        console.error('发送验证码错误:', error)
+        this.$message.error('发送验证码失败，请稍后重试')
+      } finally {
+        loading.close()
+      }
     }
   }
 }

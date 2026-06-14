@@ -50,14 +50,7 @@ export default {
   data() {
     return {
       searchQuery: '',
-      templates: [
-        { id: 1, name: '课程信息采集', description: '采集高校课程相关网页内容' },
-        { id: 2, name: '教师主页采集', description: '采集教师个人主页信息' },
-        { id: 3, name: '科研成果采集', description: '采集科研论文与项目数据' },
-        { id: 4, name: '招生信息采集', description: '采集高校招生简章与政策' },
-        { id: 5, name: '学术会议采集', description: '采集学术会议通知与日程' },
-        { id: 6, name: '实验室信息采集', description: '采集实验室成员与研究方向' }
-      ],
+      templates: [],
       page: 1,
       pageSize: 6,
       loading: false,
@@ -88,10 +81,11 @@ export default {
           }
           this.page++
         } else if (this.page === 1) {
-          this.$message.info('后端暂无数据，显示默认模板')
+          console.log('暂无模板数据，请先创建模板')
         }
       } catch (e) {
-        this.$message.error('获取模板列表失败（当前显示默认卡片）')
+        console.error('获取模板列表失败:', e)
+        this.$message.error('获取模板列表失败')
       } finally {
         this.loading = false
       }
@@ -111,14 +105,7 @@ export default {
     doSearch() {
       this.page = 1
       this.noMore = false
-      this.templates = [
-        { id: 1, name: '课程信息采集', description: '采集高校课程相关网页内容' },
-        { id: 2, name: '教师主页采集', description: '采集教师个人主页信息' },
-        { id: 3, name: '科研成果采集', description: '采集科研论文与项目数据' },
-        { id: 4, name: '招生信息采集', description: '采集高校招生简章与政策' },
-        { id: 5, name: '学术会议采集', description: '采集学术会议通知与日程' },
-        { id: 6, name: '实验室信息采集', description: '采集实验室成员与研究方向' }
-      ]
+      this.templates = []
       this.fetchTemplates()
     }
   }
@@ -135,7 +122,6 @@ export default {
 }
 .template-list {
   margin-top: 20px;
-  /* 不再限制高度和滚动，由页面整体滚动 */
 }
 .template-list .el-col {
   margin-bottom: 20px;

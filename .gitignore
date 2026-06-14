@@ -80,6 +80,7 @@ secrets.py
 *.sublime-*
 
 # ========== 数据文件 ==========
+data/
 # 爬取的数据
 data/raw/
 data/processed/
@@ -136,3 +137,19 @@ temp/
 # Node.js / 前端相关
 node_modules/
 dist/
+
+
+# 项目临时目录 & 测试文件
+sandbox/sandbox/
+src/backend/test_crawl.py
+
+# 原有你配置的补充（按需保留）
+hust_faculty_data.tar.gz
+sandbox/test_images/
+tests/
+*.txt
+*.bat
+src/backend/test.jpg
+src/backend/test_image_base64.txt
+course_pages.json
+get_training_data.py

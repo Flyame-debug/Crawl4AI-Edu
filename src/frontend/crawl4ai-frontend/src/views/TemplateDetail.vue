@@ -167,18 +167,26 @@ export default {
         this.$message.error('模板更新失败')
       }
     },
+
     async handleCollect() {
+      console.log('开始采集，模板ID:', this.$route.params.id)
       try {
-        const res = await startTask({ template_id: this.$route.params.id, config: { max_depth: 3, max_concurrent: 5 } })
+        const res = await startTask({ 
+          template_id: this.$route.params.id, 
+          config: { max_depth: 3, max_concurrent: 5 } 
+        })
+        console.log('启动响应:', res.data)
         this.taskId = res.data.task_id
         this.collectState = 'collecting'
         this.$message.success(res.data.message || '任务已启动')
         this.fetchPreview()
         this.startProgressPolling()
       } catch (e) {
+        console.error('启动失败:', e)
         this.$message.error('启动采集任务失败')
       }
     },
+
     async pauseCollect() {
       if (!this.taskId) return
       try {
@@ -190,6 +198,7 @@ export default {
         this.$message.error('暂停任务失败')
       }
     },
+
     async endCollect() {
       if (!this.taskId) return
       try {
@@ -204,6 +213,7 @@ export default {
         this.$message.error('停止任务失败')
       }
     },
+
     async fetchPreview() {
       if (!this.taskId) return
       try {
@@ -215,20 +225,41 @@ export default {
         this.$message.error('获取采集数据预览失败')
       }
     },
+
     startProgressPolling() {
       if (this.progressTimer) clearInterval(this.progressTimer)
       this.progressTimer = setInterval(async () => {
         if (!this.taskId || this.collectState !== 'collecting') return
         try {
           const res = await getTaskProgress(this.taskId)
+          console.log('进度更新:', res.data)
+          
           if (res.data) {
-            this.progress = res.data.percent
-            this.progressMessage = res.data.message
+            this.progress = res.data.percent || 0
+            this.progressMessage = res.data.message || ''
+            
+            if (res.data.status === 'completed') {
+              this.collectState = 'idle'
+              this.progress = 100
+              this.progressMessage = '采集完成！'
+              clearInterval(this.progressTimer)
+              this.$message.success('采集任务已完成')
+              this.fetchPreview()
+            } else if (res.data.status === 'failed') {
+              this.collectState = 'idle'
+              clearInterval(this.progressTimer)
+              this.$message.error('采集任务失败')
+              this.fetchPreview()
+            } else if (res.data.status === 'stopped') {
+              this.collectState = 'idle'
+              clearInterval(this.progressTimer)
+              this.$message.info('采集任务已停止')
+            }
           }
         } catch (e) {
-          this.$message.error('获取任务进度失败')
+          console.error('获取任务进度失败:', e)
         }
-      }, 5000)
+      }, 3000)
     }
   }
 }
