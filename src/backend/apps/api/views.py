@@ -5,6 +5,7 @@
 import os
 import uuid
 import threading
+import time
 import sys
 import traceback
 from pathlib import Path
@@ -493,40 +494,95 @@ sandbox_path = PROJECT_ROOT / "sandbox"
 if str(sandbox_path) not in sys.path:
     sys.path.insert(0, str(sandbox_path))
 
-
+TASK_CONTROL_SIGNALS = {}
+TASK_CONTROL_LOCK = threading.Lock()
 def run_async_crawl(task_id, seed_url, max_depth, config):
     """在独立线程中运行异步爬虫"""
+    import sys
+    import os
+    from pathlib import Path
+    import django
+    import asyncio
+    import threading
+    import time  # 添加 time 模块
+    
+    # 设置 Django 环境
+    current_file = Path(__file__).resolve()
+    # 计算正确的路径
+    BACKEND_ROOT = current_file.parent.parent.parent  # E:\Crawl4AI\src\backend
+    DJANGO_ROOT = BACKEND_ROOT / "edu_backend"  # E:\Crawl4AI\src\backend\edu_backend
+    PROJECT_ROOT = BACKEND_ROOT.parent.parent  # E:\Crawl4AI
+    
+    # 添加路径
+    for path in [str(PROJECT_ROOT), str(DJANGO_ROOT), str(BACKEND_ROOT)]:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    
+    # 设置 Django 设置模块
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
+    django.setup()
+    
+    # 导入 Django 模型
+    from django.utils import timezone
+    from apps.api.models import CrawlTask
+    
+    # 添加 sandbox 路径
+    sandbox_path = PROJECT_ROOT / "sandbox"
+    sandbox_str = str(sandbox_path)
+    if sandbox_str in sys.path:
+        sys.path.remove(sandbox_str)
+    sys.path.insert(0, sandbox_str)
+    
+    # 打印调试信息
+    print(f"=== 调试信息 ===")
+    print(f"task_id: {task_id}")
+    print(f"seed_url: {seed_url}")
+    print(f"max_depth: {max_depth}")
+    print(f"PROJECT_ROOT: {PROJECT_ROOT}")
+    print(f"sandbox_path: {sandbox_path}")
+    print(f"sandbox_path 存在: {sandbox_path.exists()}")
+    
+    # 测试导入爬虫模块
     try:
-        import sys
-        from pathlib import Path
-        
-        # ✅ 在线程内部重新计算并添加路径
-        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-        sandbox_path = PROJECT_ROOT / "sandbox"
-        if str(sandbox_path) not in sys.path:
-            sys.path.insert(0, str(sandbox_path))
-        
-        # 调试：打印路径
-        print(f"线程内 sys.path 包含 sandbox: {any('sandbox' in p for p in sys.path)}")
-        print(f"sandbox_path: {sandbox_path}")
-        
-        import django
-        django.setup()
-        
-        from django.utils import timezone
-        from apps.api.models import CrawlTask
-        
-        CrawlTask.objects.filter(task_id=task_id).update(status='running')
-        
-        # ✅ 现在导入
+        import standalone_crawler.crawler
+        print("✅ standalone_crawler.crawler 导入成功")
         from standalone_crawler.crawler import crawl as run_crawl
-        import asyncio
+        print("✅ crawl 函数导入成功")
+    except ImportError as e:
+        print(f"❌ 导入失败: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            CrawlTask.objects.filter(task_id=task_id).update(
+                status='failed',
+                error_message=f"导入爬虫模块失败: {str(e)}"
+            )
+        except:
+            pass
+        return
+    
+    # 注册控制信号
+    from apps.api.views import TASK_CONTROL_LOCK, TASK_CONTROL_SIGNALS
+    with TASK_CONTROL_LOCK:
+        stop_event = threading.Event()
+        TASK_CONTROL_SIGNALS[task_id] = {
+            'stop_event': stop_event,
+            'is_stop': False
+        }
+    
+    try:
+        # 更新任务状态为 running
+        CrawlTask.objects.filter(task_id=task_id).update(status='running')
+        print(f"✅ 任务状态已更新为 running")
         
         print(f"🚀 爬虫线程启动: task_id={task_id}, seed_url={seed_url}")
         
+        # 创建新的事件循环
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        stats = loop.run_until_complete(run_crawl(
+        
+        # 创建爬虫任务
+        crawl_task = loop.create_task(run_crawl(
             seed_url=seed_url,
             max_depth=max_depth,
             max_concurrent=config.get('max_concurrent', 5),
@@ -535,28 +591,76 @@ def run_async_crawl(task_id, seed_url, max_depth, config):
             white_list_patterns=config.get('white_list_patterns', []),
             enable_dead_check=config.get('enable_dead_check', False),
         ))
-        loop.close()
         
-        print(f"✅ 爬虫完成: 总数={stats.total}, 成功={stats.success}")
+        # 定期检查是否需要停止（使用同步方式）
+        while not crawl_task.done():
+            # 检查停止信号
+            with TASK_CONTROL_LOCK:
+                if task_id in TASK_CONTROL_SIGNALS and TASK_CONTROL_SIGNALS[task_id].get('is_stop'):
+                    print(f"🛑 收到停止信号，取消任务 {task_id}")
+                    crawl_task.cancel()
+                    # 等待任务取消
+                    try:
+                        loop.run_until_complete(crawl_task)
+                    except asyncio.CancelledError:
+                        pass
+                    raise Exception("任务被用户停止")
+            
+            # 运行事件循环一小段时间，让爬虫继续执行
+            try:
+                # 使用 run_until_complete 配合 asyncio.sleep 来实现非阻塞等待
+                loop.run_until_complete(asyncio.sleep(1))
+            except RuntimeError:
+                break
+            except Exception as e:
+                print(f"循环执行异常: {e}")
+                break
         
-        CrawlTask.objects.filter(task_id=task_id).update(
-            status='completed',
-            total_pages=stats.total,
-            success_pages=stats.success,
-            failed_pages=stats.failed,
-            report=stats.report(),
-            updated_at=timezone.now()
-        )
+        # 获取结果
+        if not crawl_task.cancelled():
+            stats = crawl_task.result()
+            loop.close()
+            
+            print(f"✅ 爬虫完成: 总数={stats.total}, 成功={stats.success}")
+            
+            # 更新任务为完成状态
+            CrawlTask.objects.filter(task_id=task_id).update(
+                status='completed',
+                total_pages=stats.total,
+                success_pages=stats.success,
+                failed_pages=stats.failed,
+                report=stats.report() if hasattr(stats, 'report') else f"总数:{stats.total}, 成功:{stats.success}, 失败:{stats.failed}",
+                updated_at=timezone.now()
+            )
+            print(f"✅ 任务状态已更新为 completed")
         
     except Exception as e:
         import traceback
         print(f"❌ 爬虫异常: {e}")
         traceback.print_exc()
-        CrawlTask.objects.filter(task_id=task_id).update(
-            status='failed',
-            error_message=str(e),
-            traceback=traceback.format_exc()
-        )
+        
+        # 检查是否是主动停止
+        with TASK_CONTROL_LOCK:
+            is_stop = task_id in TASK_CONTROL_SIGNALS and TASK_CONTROL_SIGNALS[task_id].get('is_stop', False)
+            status = 'stopped' if is_stop else 'failed'
+        
+        try:
+            CrawlTask.objects.filter(task_id=task_id).update(
+                status=status,
+                error_message=str(e),
+                traceback=traceback.format_exc(),
+                updated_at=timezone.now()
+            )
+        except:
+            pass
+    finally:
+        with TASK_CONTROL_LOCK:
+            TASK_CONTROL_SIGNALS.pop(task_id, None)
+        # 确保事件循环关闭
+        try:
+            loop.close()
+        except:
+            pass
 
 @api_view(['POST'])
 def start_crawl(request):
@@ -773,7 +877,9 @@ def template_detail(request, pk):
 @api_view(['POST'])
 def start_task(request):
     """启动采集任务"""
+    print("🔥 start_task 被调用")
     template_id = request.data.get('template_id')
+    print(f"template_id: {template_id}")
     seed_url = request.data.get('seed_url')
     config = request.data.get('config', {})
     
@@ -808,7 +914,7 @@ def start_task(request):
         max_depth=config.get('max_depth', 2),
         status='running'
     )
-    
+    print(f"创建任务: {task.task_id}")
     # 启动后台爬虫线程
     thread = threading.Thread(
         target=run_async_crawl,
@@ -816,7 +922,7 @@ def start_task(request):
         daemon=True
     )
     thread.start()
-    
+    print("✅ 线程已启动")
     return Response({
         'task_id': str(task.task_id),
         'task_name': task_name,
@@ -850,12 +956,17 @@ def pause_task(request, task_id):
 
 @api_view(['POST'])
 def stop_task(request, task_id):
-    """停止任务"""
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
         if task.status not in ['running', 'paused']:
             return Response({'error': '只有运行中或暂停的任务可以停止'}, status=400)
+        
+        # 发送停止信号
+        with TASK_CONTROL_LOCK:
+            if task_id in TASK_CONTROL_SIGNALS:
+                TASK_CONTROL_SIGNALS[task_id]['stop_event'].set()
+                TASK_CONTROL_SIGNALS[task_id]['is_stop'] = True
         
         task.status = 'stopped'
         task.save()
