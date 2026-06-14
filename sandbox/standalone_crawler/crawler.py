@@ -121,6 +121,7 @@ async def crawl(
     seed_urls: list[str] | None = None,
     output_dir: str | None = None,
     no_graceful: bool = False,
+    resume_path: str | None = None,
 ) -> Statistics | None:
     """Run a breadth-first crawl.
 
@@ -349,6 +350,7 @@ async def crawl(
         enable_dead_check=enable_dead_check, allowed_domains=allowed_domains,
         white_list_patterns=white_list_patterns, request_delay=request_delay,
         config_path=config_path, seed_urls=seed_urls, output_dir=output_dir,
+        resume_path=resume_path,
     )
 
 
@@ -371,6 +373,7 @@ async def _run_bfs_crawl(
     seed_meta: dict[str, Any] | None = None,
     seed_urls: list[str] | None = None,
     output_dir: str | None = None,
+    resume_path: str | None = None,
 ) -> Statistics:
     """Core BFS crawl engine — processes one seed URL breadth-first.
 
@@ -391,6 +394,36 @@ async def _run_bfs_crawl(
     if enable_dead_check and dead_checker is None:
         logger.warning("enable_dead_check=True but dead_link_checker is not available; skipped.")
 
+    # --- Resume / checkpoint support ------------------------------------------
+    _crawled_set: set[str] = set()
+    _resume_queue: asyncio.Queue[str | None] = asyncio.Queue()
+    _resume_lock = asyncio.Lock()
+
+    if resume_path and api_client is None:
+        _rp = Path(resume_path)
+        if _rp.is_file():
+            _crawled_set = set(
+                line.strip() for line in _rp.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            logger.info("Resume: loaded %d already-crawled URL(s) from %s", len(_crawled_set), resume_path)
+
+        async def _resume_writer() -> None:
+            """Background task that drains the queue and appends to resume file."""
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            with open(_rp, "a", encoding="utf-8") as f:
+                while True:
+                    u = await _resume_queue.get()
+                    if u is None:  # Sentinel to stop.
+                        break
+                    f.write(u + "\n")
+                    f.flush()
+            logger.info("Resume writer stopped — file saved to %s", resume_path)
+
+        _writer_task = asyncio.create_task(_resume_writer())
+    else:
+        _writer_task = None
+
     stats = Statistics()
     stats.start()
 
@@ -405,16 +438,28 @@ async def _run_bfs_crawl(
     ensure_dir(f"{_output_dir}/images")
 
     # Build initial seed list: either from seed_urls or single seed_url.
+    skipped_resume: int = 0
     if seed_urls:
         initial_urls: list[str] = []
         for u in seed_urls:
             nu = normalize_url(u)
+            if nu in _crawled_set:
+                skipped_resume += 1
+                continue
             if not bloom.contains(nu):
                 bloom.add(nu)
                 initial_urls.append(nu)
-        logger.info("Loaded %d unique seed URLs (from %d input)", len(initial_urls), len(seed_urls))
+        logger.info("Loaded %d unique seed URLs (from %d input), skipped %d already-crawled",
+                     len(initial_urls), len(seed_urls), skipped_resume)
     else:
         seed_norm = normalize_url(seed_url)
+        if seed_norm in _crawled_set:
+            logger.info("Seed URL already crawled in previous session — nothing to do.")
+            if _writer_task:
+                await _resume_queue.put(None)
+                await _writer_task
+            stats.stop()
+            return stats
         bloom.add(seed_norm)
         initial_urls = [seed_norm]
 
@@ -430,8 +475,14 @@ async def _run_bfs_crawl(
                      depth, len(current_level), _max_concurrent)
 
         async def _worker(url: str) -> dict[str, Any]:
+            # Skip already-crawled URLs (resume mode).
+            if url in _crawled_set:
+                return {
+                    "success": True, "url": url, "depth": depth,
+                    "links": [], "images": [], "error": None, "skipped": True,
+                }
             async with semaphore:
-                return await process_page(
+                result = await process_page(
                     url, depth, bloom,
                     allowed_domains=_allowed_domains,
                     white_list_patterns=_white_patterns,
@@ -442,6 +493,10 @@ async def _run_bfs_crawl(
                     output_dir=_output_dir,
                     mapping_path=_mapping_path,
                 )
+                # On success, record URL for checkpoint/resume.
+                if result.get("success") and _writer_task is not None:
+                    await _resume_queue.put(url)
+                return result
 
         results = await asyncio.gather(
             *[_worker(u) for u in current_level], return_exceptions=True,
@@ -488,6 +543,11 @@ async def _run_bfs_crawl(
                     next_level.append(link)
 
         current_level = next_level
+
+    # --- Stop resume writer and clean up ---------------------------------------
+    if _writer_task is not None:
+        await _resume_queue.put(None)   # Sentinel to stop writer.
+        await _writer_task
 
     stats.stop()
     logger.info("Crawl complete.  %d pages processed.", stats.total)

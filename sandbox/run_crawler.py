@@ -110,6 +110,10 @@ Examples:
         "--depth", dest="depth_override", type=int, default=None,
         help="Maximum BFS depth (overrides positional max_depth).",
     )
+    parser.add_argument(
+        "--resume", default=None,
+        help="Path to crawled-urls tracking file for checkpoint/resume (local mode).",
+    )
     return parser
 
 
@@ -183,13 +187,15 @@ async def _main() -> None:
         sys.exit(1)
 
     depth = args.depth_override if args.depth_override is not None else args.max_depth
-    print(f"Starting local crawl: seed={effective_seed} max_depth={depth or 'auto'}")
+    resume_path: str | None = args.resume
+    print(f"Starting local crawl: seed={effective_seed} max_depth={depth or 'auto'}" + (f" resume={resume_path}" if resume_path else ""))
     stats = await crawl(
         seed_url=effective_seed,
         max_depth=depth,
         config_path=args.config_path,
         seed_urls=seed_urls,
         output_dir=args.output_dir,
+        resume_path=resume_path,
     )
     print(stats.report())
 
