@@ -41,4 +41,15 @@ export default {
   font-size: 14px;
   margin-left: 20px;
 }
+
+/* 强制覆盖 Element Plus 默认颜色 */
+::v-deep(.el-breadcrumb__inner) {
+  color: #000000 !important; /* 面包屑文字白色 */
+}
+
+::v-deep(.el-breadcrumb__separator) {
+  color: #5e5656 !important; /* 分隔符 '>' 白色 */
+}
 </style>
+
+
