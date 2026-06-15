@@ -1,10 +1,11 @@
 """
-功能：Django 后台管理界面优化版
+功能：Django 后台管理界面优化版 - V2.0
+新增：Template V2.0字段支持、CrawlTask V2.0字段支持、UserTemplateHistory管理
 """
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
-from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask, Template, User
+from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask, Template, User, UserTemplateHistory
 
 
 # ==================== 通用配置 ====================
@@ -25,53 +26,47 @@ admin.site.index_title = '数据仪表盘'
 # ==================== 网页快照 Admin ====================
 @admin.register(PageSnapshot)
 class PageSnapshotAdmin(BaseAdmin):
-    """网页快照后台管理 - 优化版"""
+    """网页快照后台管理 - V2.0"""
     
-    # 列表显示字段（修复：添加 category 到 list_display）
     list_display = [
-        'id', 'preview_url', 'category_badge', 'images_count', 
-        'version', 'process_status_badge', 'created_at_ago'
+        'id', 'preview_url', 'category_badge', 'task_type_badge',
+        'process_status_badge', 'images_count', 'created_at_ago'
     ]
     
-    # 可点击链接
     list_display_links = ['id', 'preview_url']
     
-    # 筛选器
     list_filter = [
-        'category', 'process_status', 'version', 
+        'category', 'process_status', 'task_type', 'version',
         ('created_at', admin.DateFieldListFilter)
     ]
     
-    # 搜索字段
     search_fields = ['url', 'markdown', 'extracted_data']
     search_help_text = '搜索 URL、内容或提取的数据'
     
-    # 只读字段
     readonly_fields = [
         'content_hash', 'created_at', 'updated_at', 'version',
         'url_link', 'preview_data', 'metadata_info'
     ]
     
-    # 排序
     ordering = ['-created_at']
-    
-    # 分页
     list_per_page = 20
     
-    # 批量操作
-    actions = ['mark_as_processed', 'mark_as_pending', 'retry_failed']
+    actions = ['mark_as_raw_converted', 'mark_as_ai_cleaned', 'mark_as_error', 'retry_failed']
     
-    # 字段分组（详情页）
     fieldsets = (
         ('基本信息', {
-            'fields': ('url_link', 'category', 'version')
+            'fields': ('url_link', 'category', 'task_type', 'version')
         }),
         ('内容数据', {
             'fields': ('markdown', 'raw_html', 'extracted_data'),
             'classes': ('wide',)
         }),
         ('处理状态', {
-            'fields': ('process_status', 'processed_at'),
+            'fields': ('process_status', 'error_info', 'processed_at'),
+            'classes': ('wide',)
+        }),
+        ('任务关联', {
+            'fields': ('task', 'user_prompt'),
             'classes': ('collapse',)
         }),
         ('元数据', {
@@ -79,7 +74,7 @@ class PageSnapshotAdmin(BaseAdmin):
             'classes': ('collapse',)
         }),
         ('错误信息', {
-            'fields': ('retry_count', 'last_error', 'process_error'),
+            'fields': ('retry_count', 'last_error'),
             'classes': ('collapse',)
         }),
         ('时间信息', {
@@ -88,42 +83,51 @@ class PageSnapshotAdmin(BaseAdmin):
         }),
     )
     
-    # ========== 自定义显示方法 ==========
-    
     def preview_url(self, obj):
-        """短链接预览"""
         url = obj.url[:60] + '...' if len(obj.url) > 60 else obj.url
         return format_html('<a href="{}" target="_blank" title="{}">{}</a>', 
                           obj.url, obj.url, url)
     preview_url.short_description = 'URL'
     
     def category_badge(self, obj):
-        """分类徽章"""
         colors = {
-            '师资': '#28a745',
-            '课程': '#007bff', 
-            '科研': '#6f42c1',
-            '其他': '#6c757d'
+            'teacher': '#28a745',
+            'course': '#007bff', 
+            'research': '#6f42c1',
+            'news': '#fd7e14',
+            'other': '#6c757d'
+        }
+        display_names = {
+            'teacher': '👨‍🏫 教师',
+            'course': '📚 课程',
+            'research': '🔬 科研',
+            'news': '📰 新闻',
+            'other': '📄 其他'
         }
         color = colors.get(obj.category, '#6c757d')
+        display = display_names.get(obj.category, obj.category or '未分类')
         return format_html('<span style="background: {}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;">{}</span>',
-                          color, obj.category or '未分类')
+                          color, display)
     category_badge.short_description = '分类'
     
+    def task_type_badge(self, obj):
+        if obj.task_type == 'preview':
+            return format_html('<span style="background: #fd7e14; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;">🔍 预览</span>')
+        return format_html('<span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;">📦 正式</span>')
+    task_type_badge.short_description = '任务类型'
+    
     def process_status_badge(self, obj):
-        """处理状态徽章"""
         status_config = {
             'pending': ('⏳ 待处理', '#ffc107'),
-            'processing': ('🔄 处理中', '#17a2b8'),
-            'completed': ('✅ 已完成', '#28a745'),
-            'failed': ('❌ 失败', '#dc3545'),
+            'raw_converted': ('📝 已转Markdown', '#17a2b8'),
+            'ai_cleaned': ('✨ AI已清洗', '#28a745'),
+            'error': ('❌ 失败', '#dc3545'),
         }
         text, color = status_config.get(obj.process_status, ('❓ 未知', '#6c757d'))
         return format_html('<span style="color: {};">{}</span>', color, text)
-    process_status_badge.short_description = '状态'
+    process_status_badge.short_description = '处理状态'
     
     def images_count(self, obj):
-        """图片数量"""
         count = len(obj.images) if obj.images else 0
         if count > 0:
             return format_html('<span style="font-weight: bold; color: #007bff;">📷 {}</span>', count)
@@ -131,18 +135,15 @@ class PageSnapshotAdmin(BaseAdmin):
     images_count.short_description = '图片'
     
     def created_at_ago(self, obj):
-        """相对时间"""
         from django.utils.timesince import timesince
         return timesince(obj.created_at) + '前'
     created_at_ago.short_description = '创建时间'
     
     def url_link(self, obj):
-        """详情页链接"""
         return format_html('<a href="{}" target="_blank">🔗 访问页面</a>', obj.url)
     url_link.short_description = '链接'
     
     def preview_data(self, obj):
-        """预览提取的数据"""
         if obj.extracted_data:
             import json
             data_preview = json.dumps(obj.extracted_data, ensure_ascii=False, indent=2)[:500]
@@ -152,62 +153,72 @@ class PageSnapshotAdmin(BaseAdmin):
     preview_data.short_description = '数据预览'
     
     def metadata_info(self, obj):
-        """元数据信息"""
         return format_html('''
             <table style="border-collapse: collapse;">
                 <tr><td style="padding: 2px 5px;"><strong>内容哈希:</strong></td><td style="padding: 2px 5px;">{}</td></tr>
                 <tr><td style="padding: 2px 5px;"><strong>页面类型:</strong></td><td style="padding: 2px 5px;">{}</td></tr>
                 <tr><td style="padding: 2px 5px;"><strong>重试次数:</strong></td><td style="padding: 2px 5px;">{}</td></tr>
             </table>
-        ''', obj.content_hash[:16] + '...', obj.page_type or '未知', obj.retry_count)
+        ''', (obj.content_hash or '无')[:16] + '...', obj.page_type or '未知', obj.retry_count)
     metadata_info.short_description = '元数据'
     
     # ========== 批量操作 ==========
     
-    @admin.action(description='✅ 标记为已处理')
-    def mark_as_processed(self, request, queryset):
-        updated = queryset.update(process_status='completed', processed_at=timezone.now())
-        self.message_user(request, f'已标记 {updated} 条数据为已完成')
+    @admin.action(description='📝 标记为已转Markdown')
+    def mark_as_raw_converted(self, request, queryset):
+        updated = queryset.update(process_status='raw_converted', processed_at=timezone.now())
+        self.message_user(request, f'已标记 {updated} 条数据为已转Markdown')
     
-    @admin.action(description='⏳ 标记为待处理')
-    def mark_as_pending(self, request, queryset):
-        updated = queryset.update(process_status='pending', retry_count=0)
-        self.message_user(request, f'已重置 {updated} 条数据为待处理')
+    @admin.action(description='✨ 标记为AI已清洗')
+    def mark_as_ai_cleaned(self, request, queryset):
+        updated = queryset.update(process_status='ai_cleaned', processed_at=timezone.now())
+        self.message_user(request, f'已标记 {updated} 条数据为AI已清洗')
+    
+    @admin.action(description='❌ 标记为错误')
+    def mark_as_error(self, request, queryset):
+        updated = queryset.update(process_status='error')
+        self.message_user(request, f'已标记 {updated} 条数据为错误')
     
     @admin.action(description='🔄 重试失败数据')
     def retry_failed(self, request, queryset):
-        updated = queryset.filter(process_status='failed').update(process_status='pending')
+        updated = queryset.filter(process_status='error').update(
+            process_status='pending', 
+            retry_count=models.F('retry_count') + 1
+        )
         self.message_user(request, f'已重置 {updated} 条失败数据为待处理')
 
 
 # ==================== 爬虫任务 Admin ====================
 @admin.register(CrawlTask)
 class CrawlTaskAdmin(BaseAdmin):
-    """爬虫任务管理"""
+    """爬虫任务管理 - V2.0（含task_type和generated_rule）"""
     
-    # 修复：移除不存在的 created_at_ago，使用 created_at
     list_display = [
-        'task_id_short', 'status_badge', 'seed_url_short', 
-        'pages_progress', 'duration', 'created_at'
+        'task_id_short', 'task_name_short', 'task_type_badge', 'status_badge', 
+        'seed_url_short', 'pages_progress', 'duration', 'created_at'
     ]
-    list_filter = ['status', ('created_at', admin.DateFieldListFilter)]
-    search_fields = ['seed_url', 'task_id']
+    list_filter = ['status', 'task_type', ('created_at', admin.DateFieldListFilter)]
+    search_fields = ['seed_url', 'task_id', 'task_name']
     readonly_fields = ['task_id', 'created_at', 'updated_at']
     list_per_page = 20
     
     fieldsets = (
         ('任务信息', {
-            'fields': ('task_id', 'status', 'seed_url')
+            'fields': ('task_id', 'task_name', 'task_type', 'status', 'seed_url', 'template')
+        }),
+        ('AI采集规则', {
+            'fields': ('generated_rule',),
+            'classes': ('collapse',)
         }),
         ('爬取进度', {
             'fields': ('total_pages', 'success_pages', 'failed_pages', 'report')
         }),
-        ('错误信息', {
-            'fields': ('error_message', 'traceback'),
+        ('时间信息', {
+            'fields': ('created_at', 'updated_at', 'started_at', 'completed_at'),
             'classes': ('collapse',)
         }),
-        ('时间信息', {
-            'fields': ('created_at', 'updated_at'),
+        ('错误信息', {
+            'fields': ('error_message', 'traceback'),
             'classes': ('collapse',)
         }),
     )
@@ -216,15 +227,28 @@ class CrawlTaskAdmin(BaseAdmin):
         return str(obj.task_id)[:8]
     task_id_short.short_description = '任务ID'
     
+    def task_name_short(self, obj):
+        name = obj.task_name or '-'
+        return name[:30] + '...' if len(name) > 30 else name
+    task_name_short.short_description = '任务名称'
+    
+    def task_type_badge(self, obj):
+        if obj.task_type == 'preview':
+            return format_html('<span style="background: #fd7e14; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">🔍 预览</span>')
+        return format_html('<span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">📦 正式</span>')
+    task_type_badge.short_description = '类型'
+    
     def status_badge(self, obj):
         config = {
-            'pending': ('⏳', '#ffc107'),
-            'running': ('▶️', '#17a2b8'),
-            'completed': ('✅', '#28a745'),
-            'failed': ('❌', '#dc3545'),
+            'pending': ('⏳ 等待', '#ffc107'),
+            'running': ('▶️ 运行', '#17a2b8'),
+            'paused': ('⏸️ 暂停', '#6c757d'),
+            'stopped': ('⏹️ 停止', '#6c757d'),
+            'completed': ('✅ 完成', '#28a745'),
+            'failed': ('❌ 失败', '#dc3545'),
         }
-        icon, color = config.get(obj.status, ('❓', '#6c757d'))
-        return format_html('<span style="color: {};">{} {}</span>', color, icon, obj.get_status_display())
+        text, color = config.get(obj.status, ('❓ 未知', '#6c757d'))
+        return format_html('<span style="color: {};">{}</span>', color, text)
     status_badge.short_description = '状态'
     
     def seed_url_short(self, obj):
@@ -233,7 +257,6 @@ class CrawlTaskAdmin(BaseAdmin):
     seed_url_short.short_description = '种子URL'
     
     def pages_progress(self, obj):
-        """进度条"""
         total = max(obj.total_pages, 1)
         percent = int(obj.success_pages / total * 100)
         return format_html('''
@@ -244,6 +267,12 @@ class CrawlTaskAdmin(BaseAdmin):
     pages_progress.short_description = '进度'
     
     def duration(self, obj):
+        end_time = obj.completed_at or obj.updated_at
+        if obj.started_at and end_time:
+            delta = end_time - obj.started_at
+            minutes = int(delta.total_seconds() // 60)
+            seconds = int(delta.total_seconds() % 60)
+            return f"{minutes}:{seconds:02d}"
         if obj.created_at and obj.updated_at:
             delta = obj.updated_at - obj.created_at
             minutes = int(delta.total_seconds() // 60)
@@ -256,7 +285,7 @@ class CrawlTaskAdmin(BaseAdmin):
 # ==================== 种子URL Admin ====================
 @admin.register(SeedURL)
 class SeedURLAdmin(BaseAdmin):
-    # 修复：移除 list_editable，改为在详情页编辑
+    
     list_display = ['id', 'url_short', 'school', 'category_badge', 'status_badge', 'need_render_icon', 'created_at']
     list_filter = ['school', 'category', 'status', 'need_render']
     search_fields = ['url', 'school']
@@ -269,9 +298,21 @@ class SeedURLAdmin(BaseAdmin):
     url_short.short_description = 'URL'
     
     def category_badge(self, obj):
-        colors = {'师资': '#28a745', '课程': '#007bff', '科研': '#6f42c1'}
+        colors = {
+            'teacher': '#28a745', 
+            'course': '#007bff', 
+            'research': '#6f42c1',
+            'other': '#6c757d'
+        }
+        display_names = {
+            'teacher': '👨‍🏫 教师',
+            'course': '📚 课程',
+            'research': '🔬 科研',
+            'other': '📄 其他'
+        }
         color = colors.get(obj.category, '#6c757d')
-        return format_html('<span style="background: {}; color: white; padding: 2px 8px; border-radius: 12px;">{}</span>', color, obj.category)
+        display = display_names.get(obj.category, obj.category or '未分类')
+        return format_html('<span style="background: {}; color: white; padding: 2px 8px; border-radius: 12px;">{}</span>', color, display)
     category_badge.short_description = '分类'
     
     def status_badge(self, obj):
@@ -309,13 +350,64 @@ class SeedURLAdmin(BaseAdmin):
 # ==================== 模板 Admin ====================
 @admin.register(Template)
 class TemplateAdmin(BaseAdmin):
-    list_display = ['id', 'name', 'seed_url_short', 'tags_display', 'usage_count', 'created_at']
-    list_filter = ['created_at']
-    search_fields = ['name', 'description', 'seed_url']
+    """模板管理 - V2.0（含分类、AI配置字段）"""
+    
+    list_display = [
+        'id', 'name', 'category_badge', 'seed_url_short', 
+        'ai_model_short', 'tags_display', 'usage_count', 'created_at'
+    ]
+    list_filter = ['category', 'status', 'is_public', 'created_at']
+    search_fields = ['name', 'description', 'seed_url', 'user_prompt']
     list_per_page = 20
+    readonly_fields = ['usage_count', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('name', 'seed_url', 'category', 'tags', 'description', 'status', 'is_public')
+        }),
+        ('AI配置', {
+            'fields': ('ai_model', 'ai_api_url', 'ai_api_key', 'user_prompt'),
+            'description': '配置AI模型和提取指令'
+        }),
+        ('兼容配置', {
+            'fields': ('ai_prompt', 'config'),
+            'classes': ('collapse',),
+            'description': '旧版配置字段，保留兼容'
+        }),
+        ('统计信息', {
+            'fields': ('usage_count', 'created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def category_badge(self, obj):
+        colors = {
+            'teacher': '#28a745',
+            'course': '#007bff',
+            'news': '#fd7e14',
+            'research': '#6f42c1',
+            'other': '#6c757d'
+        }
+        display_names = {
+            'teacher': '👨‍🏫 教师信息',
+            'course': '📚 课程信息',
+            'news': '📰 新闻公告',
+            'research': '🔬 科研成果',
+            'other': '📄 其他'
+        }
+        color = colors.get(obj.category, '#6c757d')
+        display = display_names.get(obj.category, obj.category)
+        return format_html('<span style="background: {}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">{}</span>', color, display)
+    category_badge.short_description = '分类'
+    
+    def ai_model_short(self, obj):
+        model = obj.ai_model or 'qwen2:7b'
+        return model[:20]
+    ai_model_short.short_description = 'AI模型'
     
     def seed_url_short(self, obj):
-        return obj.seed_url[:50] + '...' if len(obj.seed_url) > 50 else obj.seed_url
+        url = obj.seed_url[:50] + '...' if len(obj.seed_url) > 50 else obj.seed_url
+        return format_html('<a href="{}" target="_blank">{}</a>', obj.seed_url, url)
     seed_url_short.short_description = '种子URL'
     
     def tags_display(self, obj):
@@ -327,14 +419,40 @@ class TemplateAdmin(BaseAdmin):
     tags_display.short_description = '标签'
 
 
+# ==================== 历史模板 Admin ====================
+@admin.register(UserTemplateHistory)
+class UserTemplateHistoryAdmin(BaseAdmin):
+    """用户历史模板管理 - P1新增"""
+    
+    list_display = ['id', 'user', 'template_name', 'template_category', 'used_at']
+    list_filter = ['used_at', 'template__category']
+    search_fields = ['user__username', 'template__name']
+    readonly_fields = ['used_at']
+    list_per_page = 20
+    
+    def template_name(self, obj):
+        return obj.template.name
+    template_name.short_description = '模板名称'
+    
+    def template_category(self, obj):
+        display_names = {
+            'teacher': '👨‍🏫 教师',
+            'course': '📚 课程',
+            'news': '📰 新闻',
+            'research': '🔬 科研',
+            'other': '📄 其他'
+        }
+        return display_names.get(obj.template.category, obj.template.category)
+    template_category.short_description = '模板分类'
+
+
 # ==================== 爬虫配置 Admin ====================
 @admin.register(CrawlerConfig)
 class CrawlerConfigAdmin(BaseAdmin):
-    # 修复：添加 enabled 到 list_display
+    
     list_display = ['key', 'value_preview', 'enabled_badge', 'updated_at']
     list_filter = ['enabled']
     search_fields = ['key', 'description']
-    # 移除 list_editable，通过编辑页修改
     
     def value_preview(self, obj):
         val = str(obj.value)
@@ -352,20 +470,30 @@ class CrawlerConfigAdmin(BaseAdmin):
 @admin.register(User)
 class UserAdmin(BaseAdmin):
     """用户管理"""
-    list_display = ['id', 'username', 'email', 'created_at']
+    list_display = ['id', 'username', 'email', 'avatar_preview', 'created_at']
     list_filter = ['created_at']
     search_fields = ['username', 'email']
     readonly_fields = ['created_at']
     
     fieldsets = (
         ('基本信息', {
-            'fields': ('username', 'email')
+            'fields': ('username', 'email', 'avatar')
         }),
         ('认证信息', {
-            'fields': ('password',)
+            'fields': ('password', 'is_active')
         }),
         ('时间信息', {
-            'fields': ('created_at',),
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
+    
+    def avatar_preview(self, obj):
+        if obj.avatar:
+            return format_html('<img src="{}" style="width: 30px; height: 30px; border-radius: 50%;" />', obj.avatar)
+        return '-'
+    avatar_preview.short_description = '头像'
+
+
+# 需要导入models以支持F表达式
+from django.db import models
