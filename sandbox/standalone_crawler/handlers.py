@@ -72,6 +72,8 @@ async def process_page(
     image_concurrency: int = _DEFAULT_IMAGE_CONCURRENCY,
     output_dir: str | None = None,
     mapping_path: str | None = None,
+    task_type: str | None = None,
+    user_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Process a single page: fetch → (upload images) → extract links.
 
@@ -86,6 +88,8 @@ async def process_page(
         task_id: Crawl task ID (required when *api_client* is provided).
         seed_meta: Optional seed metadata dict (may contain ``category``, ``school``).
         image_concurrency: Max concurrent image uploads (API mode only).
+        task_type: ``"preview"`` or ``"formal"`` (V2, for pagesnapshot API).
+        user_prompt: User extraction instruction (V2, for pagesnapshot API).
 
     Returns:
         A dict with keys ``success``, ``url``, ``depth``, ``links``,
@@ -160,9 +164,12 @@ async def process_page(
             await api_client.save_page_snapshot(
                 url=url,
                 markdown=markdown,
-                html=html,
+                task_id=task_id,
+                task_type=task_type,
+                user_prompt=user_prompt,
                 category=category,
                 images=images_for_result if images_for_result else None,
+                raw_html=html,
             )
             logger.info("Page snapshot saved via API: %s (images=%d)", url, len(images_for_result))
         except Exception as exc:
