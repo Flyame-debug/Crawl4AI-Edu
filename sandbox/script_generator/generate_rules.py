@@ -188,7 +188,8 @@ def _simplify_html(html: str) -> str:
             tag_str = child.name
             cls = child.get("class")
             if cls:
-                tag_str += f".{' '.join(cls)}"
+                class_str = " ".join(cls) if isinstance(cls, list) else str(cls)
+                tag_str += f"[class='{class_str}']"
             elem_id = child.get("id")
             if elem_id:
                 tag_str += f"#{elem_id}"

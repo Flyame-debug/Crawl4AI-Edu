@@ -40,10 +40,9 @@ def ask_ollama(prompt: str, model: str = _DEFAULT_MODEL) -> str:
 
     Returns:
         The model's response text.  Returns an empty string when the server
-        is unreachable, the response is empty, or an unexpected error occurs.
-
-    Raises:
-        requests.exceptions.Timeout: When the request exceeds 30 seconds.
+        is unreachable, the request times out, the response is empty, or an
+        unexpected error occurs.  Callers should treat an empty return as a
+        signal to use fallback rules.
     """
     payload: dict[str, Any] = {
         "model": model,
@@ -65,8 +64,8 @@ def ask_ollama(prompt: str, model: str = _DEFAULT_MODEL) -> str:
         )
         return ""
     except requests.exceptions.Timeout:
-        logger.error("Ollama 请求超时（%d 秒），模型 %s 可能响应过慢。", _REQUEST_TIMEOUT, model)
-        raise
+        logger.warning("Ollama 请求超时（%d 秒），模型 %s 可能响应过慢，将使用兜底规则。", _REQUEST_TIMEOUT, model)
+        return ""
     except requests.exceptions.RequestException as exc:
         logger.error("Ollama 请求失败: %s", exc)
         return ""

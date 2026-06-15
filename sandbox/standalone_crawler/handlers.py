@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -35,6 +37,8 @@ from urllib.parse import urljoin
 
 from fetcher import FetchError, async_fetch
 from link import extract_links
+
+from crawler.anti_detect import analyze_anti_crawl
 
 from .crawl4ai_client import convert_with_crawl4ai
 from .utils import get_logger, normalize_url
@@ -108,6 +112,15 @@ async def process_page(
     except FetchError as exc:
         result["error"] = str(exc)
         logger.warning("Fetch failed for %s: %s", url, exc)
+        # --- Anti-crawl check: parse status code from error message ---------
+        _status_match = re.search(r"HTTP (\d+)", str(exc))
+        _status_code: int = int(_status_match.group(1)) if _status_match else 0
+        _anti_result: dict[str, Any] = analyze_anti_crawl(url, None, _status_code)
+        if _anti_result["has_encryption"]:
+            logger.warning(
+                "Anti-crawl signal on failure for %s: %s", url, _anti_result["message"],
+            )
+            result["anti_crawl"] = _anti_result
         return result
     except Exception as exc:
         result["error"] = f"Unexpected fetch error: {exc}"
@@ -115,6 +128,14 @@ async def process_page(
         return result
 
     result["html"] = html
+
+    # --- Anti-crawl content check (even on HTTP 200) --------------------------
+    _anti_check: dict[str, Any] = analyze_anti_crawl(url, html, 200)
+    if _anti_check["has_encryption"]:
+        logger.warning(
+            "Anti-crawl signal in content for %s: %s", url, _anti_check["message"],
+        )
+        result["anti_crawl"] = _anti_check
 
     # 1.5 Convert HTML → Markdown via Crawl4AI (with fallback) -----------------
     try:
