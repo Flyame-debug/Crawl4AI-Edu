@@ -1,0 +1,25 @@
+{
+  "report_meta": {
+    "generated_at": "2026-06-15T08:11:48.444241+00:00",
+    "task_label": "preview"
+  },
+  "summary": {
+    "total_pages": 1,
+    "success_pages": 1,
+    "failed_pages": 0,
+    "success_rate": 1.0,
+    "total_images": 0,
+    "elapsed_seconds": 10.31
+  },
+  "content_metrics": {
+    "pages_with_body_measured": 1,
+    "average_body_length_chars": 559.0,
+    "pages_with_images": 0,
+    "pages_without_images": 1,
+    "image_missing_rate": 1.0
+  },
+  "failure_breakdown": {
+    "by_category": {},
+    "failed_urls": []
+  }
+}

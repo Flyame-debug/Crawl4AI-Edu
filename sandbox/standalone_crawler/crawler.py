@@ -32,6 +32,8 @@ for _p in (_sandbox, _project_root):
 
 from link import create_bloom_filter
 
+from crawler.quality_report import generate_quality_report
+
 from .handlers import process_page
 from .stats import Statistics
 from .utils import ensure_dir, get_logger, normalize_url
@@ -488,6 +490,7 @@ async def _run_bfs_crawl(
     semaphore = asyncio.Semaphore(_max_concurrent)
     current_level: list[str] = initial_urls
     _preview_pages_done: int = 0  # Counter for preview mode page limit.
+    _all_page_results: list[dict[str, Any]] = []  # Accumulate for quality report.
 
     for depth in range(_max_depth + 1):
         if not current_level:
@@ -549,6 +552,7 @@ async def _run_bfs_crawl(
                 continue
 
             stats.add_result(result)
+            _all_page_results.append(result)
 
             if not result.get("success"):
                 continue
@@ -601,6 +605,18 @@ async def _run_bfs_crawl(
 
     stats.stop()
     logger.info("Crawl complete.  %d pages processed.", stats.total)
+
+    # --- Generate quality report ---------------------------------------------
+    _report_dir: str = f"{_output_dir}/reports"
+    try:
+        _report_path: str = generate_quality_report(
+            stats, _all_page_results, _report_dir,
+            task_label=task_type,
+        )
+        logger.info("Quality report saved: %s", _report_path)
+    except Exception as exc:
+        logger.warning("Failed to generate quality report: %s", exc)
+
     return stats
 
 
