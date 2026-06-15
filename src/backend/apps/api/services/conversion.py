@@ -269,8 +269,48 @@ def convert_page(page_id: int) -> dict:
             page.processed_at = timezone.now()
             page.retry_count = 0
             page.last_error = ''
+
+            # 模块6：数据提取（转换成功后执行，提取失败不阻塞主流程）
+            try:
+                from apps.api.services.extraction import extract_page
+                extraction_result = extract_page(
+                    raw_html=page.raw_html,
+                    markdown=result['markdown'],
+                    page_type_hint=page.page_type,
+                )
+                page.extracted_data = {
+                    'page_type': extraction_result.get('page_type', 'unknown'),
+                    'extracted': extraction_result.get('extracted', {}),
+                    'confidence': extraction_result.get('confidence', 0.0),
+                    'method': extraction_result.get('method', 'unknown'),
+                }
+                # 如果提取出了明确的 page_type，更新该字段
+                if extraction_result.get('page_type') and \
+                   extraction_result['page_type'] != 'unknown':
+                    page.page_type = extraction_result['page_type']
+
+                logger.info(
+                    f'数据提取完成: {page.url} (id={page_id}), '
+                    f'page_type={page.page_type}, '
+                    f'method={extraction_result.get("method")}, '
+                    f'confidence={extraction_result.get("confidence")}'
+                )
+            except Exception as extract_err:
+                # 提取失败不阻塞转换流程，记录日志后继续
+                logger.warning(
+                    f'数据提取失败（不影响转换结果）: {page.url} '
+                    f'(id={page_id}), 错误: {extract_err}'
+                )
+                page.extracted_data = {
+                    'page_type': page.page_type or 'unknown',
+                    'extracted': {},
+                    'confidence': 0.0,
+                    'method': 'extraction_error',
+                }
+
             page.save(update_fields=[
-                'markdown', 'process_status', 'processed_at',
+                'markdown', 'extracted_data', 'page_type',
+                'process_status', 'processed_at',
                 'retry_count', 'last_error',
             ])
             logger.info(f'页面转换成功: {page.url} (id={page_id})')
@@ -280,6 +320,7 @@ def convert_page(page_id: int) -> dict:
                 'url': page.url,
                 'title': result['title'],
                 'stats': result['stats'],
+                'extraction': page.extracted_data,
             }
         else:
             # 转换失败，更新 retry_count 和错误信息
