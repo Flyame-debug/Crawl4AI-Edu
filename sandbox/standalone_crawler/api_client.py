@@ -164,14 +164,16 @@ class APIClient:
         markdown: str,
         category: str | None = None,
         images: list[dict[str, str]] | None = None,
+        html: str | None = None,
     ) -> dict[str, Any]:
         """Save a crawled page snapshot to the backend.
 
         Args:
             url: Page URL (required).
-            markdown: Page content / HTML (required).
+            markdown: Page content in Markdown (required).
             category: Optional category hint.
             images: Optional list of {"original_url": str, "stored_url": str}.
+            html: Optional raw HTML content (sent alongside markdown).
 
         Returns:
             Dict with ``action`` (created/updated/skipped) and ``data``.
@@ -182,6 +184,8 @@ class APIClient:
             payload["category"] = category
         if images is not None:
             payload["images"] = images
+        if html is not None:
+            payload["html"] = html
         return await self._request("POST", endpoint, json=payload)
 
     # ------------------------------------------------------------------

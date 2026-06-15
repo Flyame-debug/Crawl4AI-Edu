@@ -17,12 +17,19 @@ Usage::
     # Custom backend URL
     python sandbox/run_crawler.py --worker --backend-url http://192.168.1.1:8000
 
+    # Preview mode (limited pages, local-only, no API ingestion)
+    python sandbox/run_crawler.py <seed_url> --task-type preview --preview-limit 3
+
+    # Full mode (default — normal API or local persistence)
+    python sandbox/run_crawler.py <seed_url> --task-type full
+
 Examples::
 
     python sandbox/run_crawler.py https://httpbin.org/html
     python sandbox/run_crawler.py https://httpbin.org/html 2
     python sandbox/run_crawler.py --worker --poll-interval 5
     python sandbox/run_crawler.py --use-api --seed https://httpbin.org/html 1
+    python sandbox/run_crawler.py https://httpbin.org/html --task-type preview --preview-limit 5
 """
 
 from __future__ import annotations
@@ -114,6 +121,16 @@ Examples:
         "--resume", default=None,
         help="Path to crawled-urls tracking file for checkpoint/resume (local mode).",
     )
+    parser.add_argument(
+        "--task-type", dest="task_type", default="full",
+        choices=["preview", "full"],
+        help="Task mode: 'preview' (limited pages, local-only, no API) or "
+             "'full' (normal crawling with API/local persistence). Default: full.",
+    )
+    parser.add_argument(
+        "--preview-limit", dest="preview_limit", type=int, default=10,
+        help="Maximum pages to crawl in preview mode (default: 10).",
+    )
     return parser
 
 
@@ -188,14 +205,31 @@ async def _main() -> None:
 
     depth = args.depth_override if args.depth_override is not None else args.max_depth
     resume_path: str | None = args.resume
+
+    # Preview mode: force local output and show banner.
+    task_type: str = args.task_type
+    preview_limit: int = args.preview_limit
+    if task_type == "preview":
+        output_dir = args.output_dir if args.output_dir != "sandbox/data" else "sandbox/preview_data"
+        print("=" * 60)
+        print("  预览模式 (Preview Mode)")
+        print(f"  最多抓取: {preview_limit} 个页面")
+        print(f"  输出目录: {output_dir}")
+        print(f"  数据不会写入后端数据库")
+        print("=" * 60)
+    else:
+        output_dir = args.output_dir
+
     print(f"Starting local crawl: seed={effective_seed} max_depth={depth or 'auto'}" + (f" resume={resume_path}" if resume_path else ""))
     stats = await crawl(
         seed_url=effective_seed,
         max_depth=depth,
         config_path=args.config_path,
         seed_urls=seed_urls,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         resume_path=resume_path,
+        task_type=task_type,
+        preview_limit=preview_limit,
     )
     print(stats.report())
 

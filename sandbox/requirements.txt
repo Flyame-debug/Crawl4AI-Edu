@@ -27,3 +27,10 @@ beautifulsoup4==4.12.3
 # --- 测试 ---
 pytest>=8.4
 pytest-asyncio>=1.0
+
+# --- Crawl4AI HTML → Markdown 转换 ---  # NEW_DEP
+crawl4ai>=0.8.0                          # NEW_DEP
+
+# --- HTML 可读性提取（Crawl4AI 降级方案）---  # NEW_DEP
+readability-lxml>=0.8.4                  # NEW_DEP
+markdownify>=1.2.0                       # NEW_DEP
