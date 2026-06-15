@@ -3,6 +3,7 @@
  */
 
 import { createRouter, createWebHistory } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 
 import LoginRegister from '../views/LoginRegister.vue'
 import BaseLayout from '../views/BaseLayout.vue'
@@ -16,7 +17,7 @@ import TemplateDetail from '../views/TemplateDetail.vue'
 const routes = [
   {
     path: '/',
-    redirect: '/auth'
+    redirect: '/home'
   },
   {
     path: '/auth',
@@ -32,7 +33,7 @@ const routes = [
         path: 'home',
         name: 'Home',
         component: HomeView,
-        meta: { breadcrumb: '首页' }
+        meta: { breadcrumb: '首页', public: true } // 首页允许游客访问
       },
       {
         path: 'guide',
@@ -73,12 +74,20 @@ const router = createRouter({
   routes
 })
 
-// ✅ 路由守卫：检查 token
+// ✅ 路由守卫：游客只能访问首页和登录页
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
+  const token = localStorage.getItem('token') // 登录后存储 token
   if (!to.meta.public && !token) {
-    // 没有 token 且访问的不是公开路由，跳转到登录页
-    next('/auth')
+    // 游客访问受限页面 → 弹窗提示
+    ElMessageBox.confirm('请先登录！', '提示', {
+      confirmButtonText: '登录',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }).then(() => {
+      next('/auth') // 跳转登录页
+    }).catch(() => {
+      next('/home') // 返回首页
+    })
   } else {
     next()
   }

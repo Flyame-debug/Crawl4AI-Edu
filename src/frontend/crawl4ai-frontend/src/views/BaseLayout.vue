@@ -17,14 +17,20 @@
       <header class="top-bar" :class="isCollapse ? 'collapsed' : 'expanded'">
         <app-breadcrumb class="breadcrumb" />
         <div class="user-info">
-          <el-dropdown>
-            <span class="el-dropdown-link"><el-avatar src="/profilephoto.png" /></span>
+          <!-- 登录用户：显示头像 -->
+          <el-dropdown v-if="!isGuest">
+            <span class="el-dropdown-link">
+              <el-avatar src="/profilephoto.png" />
+            </span>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+
+          <!-- 游客：显示登录按钮 -->
+          <el-button v-else type="primary" @click="goLogin">登录</el-button>
         </div>
       </header>
       <div class="content">
@@ -44,9 +50,13 @@ export default {
   name: 'BaseLayout',
   components: { AppBreadcrumb, AppSidebar },
   data() {
-    return { isCollapse: false }
+    return {
+      isCollapse: false,
+      isGuest: true
+    }
   },
   mounted() {
+    this.checkLoginStatus()
     this.initParticles()
     window.addEventListener('resize', this.resizeCanvas)
   },
@@ -54,9 +64,17 @@ export default {
     window.removeEventListener('resize', this.resizeCanvas)
   },
   methods: {
+    checkLoginStatus() {
+      this.isGuest = !localStorage.getItem('token')
+    },
     toggleCollapse() { this.isCollapse = !this.isCollapse },
     logout() {
-      alert('已退出登录')
+      localStorage.removeItem('token')
+      localStorage.removeItem('username')
+      this.isGuest = true
+      this.$router.push('/auth')
+    },
+    goLogin() {
       this.$router.push('/auth')
     },
     resizeCanvas() {
