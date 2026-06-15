@@ -7,7 +7,6 @@ from django.utils.html import format_html
 from django.utils import timezone
 from .models import PageSnapshot, SeedURL, CrawlerConfig, CrawlTask, Template, User, UserTemplateHistory
 
-
 # ==================== 通用配置 ====================
 class BaseAdmin(admin.ModelAdmin):
     """基础Admin类，提供通用功能"""

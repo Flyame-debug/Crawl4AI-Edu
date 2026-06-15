@@ -20,7 +20,9 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-
+from django.db.models import Q
+from rest_framework import viewsets, status
+from rest_framework.response import Response
 from .models import (
     User, Template, CrawlTask, PageSnapshot, 
     SeedURL, CrawlerConfig, UserTemplateHistory
@@ -38,6 +40,121 @@ logger = logging.getLogger(__name__)
 TASK_CONTROL_SIGNALS = {}
 TASK_CONTROL_LOCK = threading.Lock()
 
+# 在 views.py 文件开头添加以下内容
+
+from rest_framework import viewsets
+from .models import PageSnapshot, SeedURL
+from .serializers import PageSnapshotSerializer, SeedURLSerializer
+
+
+# ==================== ViewSet 定义（供 router 使用） ====================
+
+class PageSnapshotViewSet(viewsets.ModelViewSet):
+    """网页快照 ViewSet"""
+    queryset = PageSnapshot.objects.all().order_by('-created_at')
+    serializer_class = PageSnapshotSerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        category = self.request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(category=category)
+        
+        process_status = self.request.query_params.get('process_status')
+        if process_status:
+            queryset = queryset.filter(process_status=process_status)
+        
+        task_type = self.request.query_params.get('task_type')
+        if task_type:
+            queryset = queryset.filter(task_type=task_type)
+        
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(url__icontains=search) | Q(markdown__icontains=search)
+            )
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """创建快照 - 使用 V2.0 逻辑"""
+        url = request.data.get('url')
+        markdown = request.data.get('markdown')
+        raw_html = request.data.get('raw_html')
+        task_type = request.data.get('task_type', 'formal')
+        user_prompt = request.data.get('user_prompt', '')
+        images = request.data.get('images', [])
+        
+        if not url or not markdown:
+            return Response(
+                {'code': 400, 'msg': 'url 和 markdown 为必填字段', 'data': None},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 预览任务限制检查
+        if task_type == 'preview':
+            preview_count = PageSnapshot.objects.filter(task_type='preview').count()
+            if preview_count >= 10:
+                return Response(
+                    {'code': 400, 'msg': '预览任务最多支持10条数据', 'data': None},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        category = request.data.get('category')
+        if not category:
+            from .services.snapshot_service import PageSnapshotService
+            category = PageSnapshotService.auto_category_from_url(url)
+        
+        # 保存快照
+        from .services.snapshot_service import PageSnapshotService
+        result = PageSnapshotService.save_or_update(
+            url=url,
+            markdown=markdown,
+            category=category,
+            raw_html=raw_html,
+            task_type=task_type,
+            user_prompt=user_prompt,
+            images=images
+        )
+        
+        if result['obj'] is None:
+            return Response(
+                {'code': 400, 'msg': '预览任务已达上限', 'data': None},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = self.get_serializer(result['obj'])
+        return Response({
+            'code': 200,
+            'msg': 'success',
+            'data': {
+                'action': result['action'],
+                'snapshot': serializer.data
+            }
+        })
+
+
+class SeedURLViewSet(viewsets.ModelViewSet):
+    """种子URL ViewSet"""
+    queryset = SeedURL.objects.all().order_by('-created_at')
+    serializer_class = SeedURLSerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        school = self.request.query_params.get('school')
+        if school:
+            queryset = queryset.filter(school=school)
+        
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        category = self.request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(category=category)
+        
+        return queryset
 
 # ==================== 公共接口（全员可用） ====================
 
@@ -104,6 +221,38 @@ def register(request):
         'code': 200,
         'msg': '注册成功',
         'data': {'id': user.id, 'username': user.username}
+    })
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def send_email_code(request):
+    """
+    发送邮箱验证码（联调阶段）
+    实际生产环境需要对接邮件服务
+    """
+    email = request.data.get('email')
+    
+    if not email:
+        return Response({
+            'code': 400,
+            'msg': '邮箱不能为空',
+            'data': None
+        }, status=400)
+    
+    # TODO: 实际发送邮件逻辑
+    # 联调阶段可临时返回固定验证码 123456
+    # 生产环境需要：
+    # 1. 生成6位随机验证码
+    # 2. 存储到Redis（有效期5分钟）
+    # 3. 调用邮件服务发送
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'message': '验证码已发送（联调测试码：123456）',
+            'debug_code': '123456'  # 仅开发环境返回，生产环境删除
+        }
     })
 
 
@@ -189,6 +338,76 @@ def get_crawler_status(request):
         }
     })
 
+@api_view(['GET'])
+def get_crawl_status(request, task_id):
+    """
+    查询单个爬虫任务状态
+    GET /api/crawl/status/<task_id>/
+    """
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        return Response({
+            'code': 200,
+            'msg': 'success',
+            'data': {
+                'task_id': str(task.task_id),
+                'task_name': task.task_name,
+                'task_type': task.task_type,
+                'status': task.status,
+                'seed_url': task.seed_url,
+                'max_depth': task.max_depth,
+                'total_pages': task.total_pages,
+                'success_pages': task.success_pages,
+                'failed_pages': task.failed_pages,
+                'error_message': task.error_message,
+                'report': task.report,
+                'created_at': task.created_at,
+                'updated_at': task.updated_at,
+                'started_at': task.started_at,
+                'completed_at': task.completed_at,
+            }
+        })
+    except CrawlTask.DoesNotExist:
+        return Response({
+            'code': 404,
+            'msg': '任务不存在',
+            'data': None
+        }, status=404)
+
+
+@api_view(['GET'])
+def list_crawl_tasks(request):
+    """
+    列出所有爬虫任务
+    GET /api/crawl/tasks/
+    """
+    limit = int(request.query_params.get('limit', 50))
+    tasks = CrawlTask.objects.all().order_by('-created_at')[:limit]
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'total': CrawlTask.objects.count(),
+            'tasks': [
+                {
+                    'task_id': str(t.task_id),
+                    'task_name': t.task_name,
+                    'task_type': t.task_type,
+                    'status': t.status,
+                    'seed_url': t.seed_url,
+                    'max_depth': t.max_depth,
+                    'total_pages': t.total_pages,
+                    'success_pages': t.success_pages,
+                    'failed_pages': t.failed_pages,
+                    'error_message': t.error_message,
+                    'created_at': t.created_at,
+                    'updated_at': t.updated_at,
+                }
+                for t in tasks
+            ]
+        }
+    })
 
 @api_view(['GET'])
 def get_logs(request):
@@ -220,6 +439,33 @@ def get_logs(request):
         'data': {'logs': recent_lines, 'total': len(recent_lines), 'file': str(log_path)}
     })
 
+@api_view(['GET'])
+def get_log_files(request):
+    """获取日志文件列表"""
+    log_dir = Path(__file__).resolve().parent.parent.parent / 'logs'
+    
+    if not log_dir.exists():
+        return Response({
+            'code': 200,
+            'msg': 'success',
+            'data': {'files': []}
+        })
+    
+    files = []
+    for f in log_dir.glob('*.log'):
+        files.append({
+            'name': f.name,
+            'size': f.stat().st_size,
+            'modified': f.stat().st_mtime
+        })
+    
+    files.sort(key=lambda x: x['modified'], reverse=True)
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {'files': files}
+    })
 
 @api_view(['GET'])
 def health_check(request):

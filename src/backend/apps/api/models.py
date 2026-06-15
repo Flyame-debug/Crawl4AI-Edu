@@ -1,5 +1,5 @@
 """
-功能：定义数据库表结构（数据模型）- V2.0修正版
+功能：定义数据库表结构（数据模型）- V2.0完整版
 """
 import uuid
 from django.db import models
@@ -32,6 +32,7 @@ class PageSnapshot(models.Model):
     url = models.URLField(verbose_name="URL地址")
     raw_html = models.TextField(blank=True, null=True, verbose_name="原始HTML")
     markdown = models.TextField(blank=True, null=True, verbose_name="Markdown内容")
+    content_hash = models.CharField(max_length=64, blank=True, null=True, verbose_name="内容哈希")
     
     # ========== 状态字段 ==========
     process_status = models.CharField(
@@ -71,11 +72,8 @@ class PageSnapshot(models.Model):
     )
     images = models.JSONField(default=list, blank=True, verbose_name="图片列表")
     
-    # ========== 版本与哈希字段 ==========
-    content_hash = models.CharField(max_length=64, blank=True, null=True, verbose_name="内容哈希")
+    # ========== 版本与错误处理 ==========
     version = models.IntegerField(default=1, verbose_name="版本号")
-    
-    # ========== 错误处理字段 ==========
     retry_count = models.IntegerField(default=0, verbose_name="重试次数")
     last_error = models.TextField(blank=True, null=True, verbose_name="最后错误")
     
@@ -88,7 +86,7 @@ class PageSnapshot(models.Model):
         db_table = 'page_snapshots'
         verbose_name = '网页快照'
         verbose_name_plural = '网页快照'
-        unique_together = [['url', 'task']]  # 同一任务下URL唯一
+        unique_together = [['url', 'task_id']]
     
     def __str__(self):
         return self.url
@@ -162,7 +160,7 @@ class CrawlTask(models.Model):
     task_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, verbose_name="任务ID")
     task_name = models.CharField(max_length=200, blank=True, null=True, verbose_name="任务名称")
     
-    # ========== V2.0 新增字段 ==========
+    # V2.0 新增字段
     task_type = models.CharField(
         max_length=20, 
         choices=TASK_TYPE_CHOICES, 
@@ -170,7 +168,6 @@ class CrawlTask(models.Model):
         verbose_name="任务类型"
     )
     generated_rule = models.TextField(blank=True, null=True, verbose_name="AI生成的采集规则")
-    # ================================
     
     # 关联字段
     template = models.ForeignKey(
@@ -235,7 +232,7 @@ class Template(models.Model):
     description = models.TextField(blank=True, verbose_name="模板描述")
     config = models.JSONField(default=dict, verbose_name="爬虫配置")
     
-    # ========== V2.0 新增字段 ==========
+    # V2.0 新增字段
     category = models.CharField(
         max_length=50, 
         choices=CATEGORY_CHOICES, 
@@ -246,7 +243,6 @@ class Template(models.Model):
     ai_api_url = models.URLField(default='http://127.0.0.1:11434', verbose_name="AI服务地址")
     ai_api_key = models.CharField(max_length=200, blank=True, null=True, verbose_name="API密钥")
     user_prompt = models.TextField(blank=True, verbose_name="用户提取指令")
-    # ================================
     
     # 原有字段
     ai_prompt = models.TextField(blank=True, verbose_name="AI提示词（旧，保留兼容）")
@@ -279,7 +275,7 @@ class Template(models.Model):
 
 
 class User(models.Model):
-    """用户模型（与Django兼容）"""
+    """用户模型"""
     username = models.CharField(max_length=50, unique=True, verbose_name="用户名")
     password = models.CharField(max_length=128, verbose_name="密码哈希")
     email = models.EmailField(blank=True, null=True, verbose_name="邮箱")
@@ -307,7 +303,7 @@ class UserTemplateHistory(models.Model):
         db_table = 'user_template_history'
         verbose_name = '用户历史模板'
         verbose_name_plural = '用户历史模板'
-        unique_together = [['user', 'template']]  # 同一用户同一模板只记录一次
+        unique_together = [['user', 'template']]
         ordering = ['-used_at']
     
     def __str__(self):
