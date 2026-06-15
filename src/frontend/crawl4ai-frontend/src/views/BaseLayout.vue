@@ -1,29 +1,16 @@
-<!-- BaseLayout.vue -->
+<!--
+  BaseLayout.vue
+  功能：系统总布局，包含粒子背景、左侧导航栏(AppSidebar)、右侧顶栏、面包屑导航、用户信息区和内容区。
+  特点：负责整体框架和页面切换动画，调用 AppSidebar 组件并管理折叠状态。
+-->
+
 <template>
   <div class="base-layout">
     <!-- 粒子背景层 -->
     <canvas id="particle-canvas"></canvas>
 
-    <!-- 左侧导航栏容器 -->
-    <div class="sidebar" :class="{ collapsed: isCollapse }">
-      <div class="sidebar-logo" @click="toggleCollapse">
-        <span v-if="!isCollapse">EduSpider</span>
-        <span v-else>E</span>
-      </div>
-
-      <el-menu
-        :default-active="$route.path"
-        router
-        class="el-menu-vertical"
-        :collapse="isCollapse"
-      >
-        <el-menu-item index="/home"><el-icon><House /></el-icon><span v-if="!isCollapse">首页</span></el-menu-item>
-        <el-menu-item index="/guide"><el-icon><Document /></el-icon><span v-if="!isCollapse">操作指南</span></el-menu-item>
-        <el-menu-item index="/templates"><el-icon><Folder /></el-icon><span v-if="!isCollapse">模板页面</span></el-menu-item>
-        <el-menu-item index="/templates/create"><el-icon><Plus /></el-icon><span v-if="!isCollapse">新建模板</span></el-menu-item>
-        <el-menu-item index="/tasks"><el-icon><Monitor /></el-icon><span v-if="!isCollapse">任务监控</span></el-menu-item>
-      </el-menu>
-    </div>
+    <!-- 左侧导航栏 -->
+    <AppSidebar :isCollapse="isCollapse" @toggle-collapse="toggleCollapse" />
 
     <!-- 右侧区域 -->
     <div class="right-area" :class="isCollapse ? 'collapsed' : 'expanded'">
@@ -51,11 +38,11 @@
 
 <script>
 import AppBreadcrumb from '../components/AppBreadcrumb.vue'
-import { House, Document, Folder, Plus, Monitor } from '@element-plus/icons-vue'
+import AppSidebar from '../components/AppSidebar.vue'
 
 export default {
   name: 'BaseLayout',
-  components: { AppBreadcrumb, House, Document, Folder, Plus, Monitor },
+  components: { AppBreadcrumb, AppSidebar },
   data() {
     return { isCollapse: false }
   },
@@ -95,7 +82,6 @@ export default {
 
       function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height)
-        // 绘制粒子
         particles.forEach(p => {
           ctx.beginPath()
           ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
@@ -106,7 +92,6 @@ export default {
           if (p.x < 0 || p.x > canvas.width) p.vx *= -1
           if (p.y < 0 || p.y > canvas.height) p.vy *= -1
         })
-        // 粒子连线
         for (let i = 0; i < particles.length; i++) {
           for (let j = i + 1; j < particles.length; j++) {
             const dx = particles[i].x - particles[j].x
@@ -128,6 +113,7 @@ export default {
   }
 }
 </script>
+
 <style scoped>
 .base-layout {
   display: flex;
@@ -142,36 +128,6 @@ export default {
   width: 100%; height: 100%;
   z-index: 0;
 }
-
-/* 侧边栏 */
-.sidebar {
-  position: fixed;
-  left: 0; top: 0; bottom: 0;
-  width: 200px;
-  transition: width 0.3s;
-  background: rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(12px);
-  border-radius: 0;
-  box-shadow: inset -1px 0 0 rgba(255,255,255,0.3);
-  z-index: 10;
-}
-.sidebar.collapsed { width: 64px; }
-
-.sidebar-logo {
-  height: 60px;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: bold; font-size: 18px;
-  cursor: pointer; color: #000;
-  background: rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(8px);
-  animation: textFade 2s ease-in-out;
-}
-
-.el-menu-vertical { border-right: none; min-height: calc(100vh - 60px); background: transparent; }
-.el-menu-item { color: #333; transition: background-color 0.3s, color 0.3s; }
-.el-menu-item.is-active { background-color: rgba(230,240,255,0.8); color: #409EFF; }
-.el-menu-item:hover { background-color: rgba(230,240,255,0.8); color: #409EFF; }
-.sidebar.collapsed .el-menu-item span { display: none; }
 
 /* 右侧区域 */
 .right-area { flex: 1; display: flex; flex-direction: column; transition: margin-left 0.3s; z-index: 5; }
