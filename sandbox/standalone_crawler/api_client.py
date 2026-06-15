@@ -32,9 +32,15 @@ class APIClientError(Exception):
 class APIClient:
     """Async HTTP client for the Crawl4AI backend REST API.
 
-    Public methods (7):
+    Public methods (8):
         get_config, get_pending_seeds, update_seed_status, start_crawl_task,
-        upload_image_base64, save_page_snapshot, report_task_result.
+        upload_image_base64, save_page_snapshot, report_task_result,
+        check_health.
+
+    All responses are expected to follow the V2 unified format
+    ``{"code": 200, "msg": "success", "data": {...}}``; the ``_request``
+    helper unwraps ``data`` automatically and raises ``APIClientError``
+    when ``code != 200``.
     """
 
     # ------------------------------------------------------------------
@@ -79,9 +85,16 @@ class APIClient:
 
         Returns:
             Dict with keys ``count`` and ``seeds`` (list of seed objects).
+            Internally maps the V2 paginated ``results`` key to ``seeds``
+            for backward compatibility.
         """
         url = f"{self._base_url}/api/seeds/pending/?limit={limit}"
-        return await self._request("GET", url)
+        data = await self._request("GET", url)
+        # Map V2 pagination format {"count": N, "results": [...]} → {"count": N, "seeds": [...]}.
+        return {
+            "count": data.get("count", len(data.get("results", []))),
+            "seeds": data.get("results", []),
+        }
 
     # ------------------------------------------------------------------
     # Endpoint 3: POST /api/seeds/status/
@@ -110,6 +123,11 @@ class APIClient:
         seed_url: str,
         max_depth: int | None = None,
         config: dict[str, Any] | None = None,
+        *,
+        task_type: str | None = None,
+        user_prompt: str | None = None,
+        ai_model: str | None = None,
+        ai_api_url: str | None = None,
     ) -> dict[str, Any]:
         """Start a crawl task and obtain a task_id.
 
@@ -117,6 +135,10 @@ class APIClient:
             seed_url: The seed URL for the crawl.
             max_depth: Maximum crawl depth (optional).
             config: Additional configuration dict (optional).
+            task_type: ``"preview"`` or ``"formal"`` (V2, recommended).
+            user_prompt: User extraction instruction (V2, optional).
+            ai_model: AI model name for rule generation (V2, optional).
+            ai_api_url: AI service URL (V2, optional).
 
         Returns:
             Dict with ``task_id``, ``message``, ``status_url``, ``created_at``.
@@ -127,6 +149,14 @@ class APIClient:
             payload["max_depth"] = max_depth
         if config is not None:
             payload["config"] = config
+        if task_type is not None:
+            payload["task_type"] = task_type
+        if user_prompt is not None:
+            payload["user_prompt"] = user_prompt
+        if ai_model is not None:
+            payload["ai_model"] = ai_model
+        if ai_api_url is not None:
+            payload["ai_api_url"] = ai_api_url
         return await self._request("POST", endpoint, json=payload)
 
     # ------------------------------------------------------------------
@@ -162,30 +192,43 @@ class APIClient:
         self,
         url: str,
         markdown: str,
+        *,
+        task_id: str | None = None,
+        task_type: str | None = None,
+        user_prompt: str | None = None,
         category: str | None = None,
         images: list[dict[str, str]] | None = None,
-        html: str | None = None,
+        raw_html: str | None = None,
     ) -> dict[str, Any]:
         """Save a crawled page snapshot to the backend.
 
         Args:
             url: Page URL (required).
             markdown: Page content in Markdown (required).
+            task_id: Crawl task ID (V2, recommended).
+            task_type: ``"preview"`` or ``"formal"`` (V2, required).
+            user_prompt: User extraction instruction (V2, optional).
             category: Optional category hint.
-            images: Optional list of {"original_url": str, "stored_url": str}.
-            html: Optional raw HTML content (sent alongside markdown).
+            images: Optional list of ``{"original_url": str, "stored_url": str}``.
+            raw_html: Optional raw HTML content (V2 field name).
 
         Returns:
             Dict with ``action`` (created/updated/skipped) and ``data``.
         """
         endpoint = f"{self._base_url}/api/pagesnapshot/"
         payload: dict[str, Any] = {"url": url, "markdown": markdown}
+        if task_id is not None:
+            payload["task_id"] = task_id
+        if task_type is not None:
+            payload["task_type"] = task_type
+        if user_prompt is not None:
+            payload["user_prompt"] = user_prompt
         if category is not None:
             payload["category"] = category
         if images is not None:
             payload["images"] = images
-        if html is not None:
-            payload["html"] = html
+        if raw_html is not None:
+            payload["raw_html"] = raw_html
         return await self._request("POST", endpoint, json=payload)
 
     # ------------------------------------------------------------------
@@ -231,6 +274,25 @@ class APIClient:
         return await self._request("POST", endpoint, json=payload)
 
     # ------------------------------------------------------------------
+    # Endpoint 8: GET /api/health/  (health check)
+    # ------------------------------------------------------------------
+
+    async def check_health(self) -> bool:
+        """Check whether the backend is reachable and healthy.
+
+        Returns:
+            ``True`` when the backend responds with code 200.
+            ``False`` on any error (connection, timeout, or non-200 code).
+        """
+        try:
+            await self._request("GET", f"{self._base_url}/api/health/")
+            logger.info("Backend health check passed: %s", self._base_url)
+            return True
+        except (APIClientError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("Backend health check failed at %s: %s", self._base_url, exc)
+            return False
+
+    # ------------------------------------------------------------------
     # Internal: retry-aware HTTP request
     # ------------------------------------------------------------------
 
@@ -242,16 +304,21 @@ class APIClient:
     ) -> dict[str, Any]:
         """Issue an async HTTP request with exponential-backoff retry.
 
+        Expects the backend V2 unified response format
+        ``{"code": 200, "msg": "success", "data": {...}}`` and returns
+        the unwrapped ``data`` dict on success.
+
         Args:
             method: HTTP method (GET, POST, …).
             url: Full endpoint URL.
             json: Optional JSON body for POST requests.
 
         Returns:
-            Parsed JSON response as a dict.
+            The unwrapped ``data`` field from the response.
 
         Raises:
-            APIClientError: When all retry attempts are exhausted.
+            APIClientError: When all retry attempts are exhausted or the
+                response ``code`` indicates a business error (!= 200).
         """
         last_error: str = ""
         for attempt in range(1, self._max_retries + 1):
@@ -260,17 +327,29 @@ class APIClient:
                     timeout=aiohttp.ClientTimeout(total=self._timeout)
                 ) as session:
                     async with session.request(method, url, json=json) as resp:
-                        # Read body once.
                         text: str = await resp.text()
-                        if resp.status < 500:
-                            # Client errors (4xx) and success (2xx) — do not retry.
-                            try:
-                                return _parse_json(text)
-                            except ValueError:
-                                logger.error("Invalid JSON from %s %s: %s", method, url, text[:200])
-                                raise APIClientError(f"Invalid JSON response: {text[:200]}")
+                        # Parse the unified response envelope.
+                        try:
+                            envelope: dict[str, Any] = _parse_json(text)
+                        except ValueError:
+                            logger.error("Invalid JSON from %s %s: %s", method, url, text[:200])
+                            raise APIClientError(f"Invalid JSON response: {text[:200]}")
+
+                        code: int = envelope.get("code", 0)
+                        msg: str = envelope.get("msg", "")
+                        data: dict[str, Any] = envelope.get("data", {}) or {}
+
+                        if code == 200:
+                            return data
+
+                        # Business or HTTP-level error.
+                        if resp.status < 500 or code < 500:
+                            raise APIClientError(
+                                f"API error (code={code}): {msg or text[:200]}"
+                            )
+
                         # 5xx — server error, retry.
-                        last_error = f"HTTP {resp.status}: {text[:200]}"
+                        last_error = f"code={code} msg={msg}"
                         logger.warning(
                             "Server error on %s %s (attempt %d/%d): %s",
                             method, url, attempt, self._max_retries, last_error,
@@ -325,10 +404,10 @@ if __name__ == "__main__":
         for attr in (
             "get_config", "get_pending_seeds", "update_seed_status",
             "start_crawl_task", "upload_image_base64",
-            "save_page_snapshot", "report_task_result",
+            "save_page_snapshot", "report_task_result", "check_health",
         ):
             assert hasattr(client, attr), f"Missing method: {attr}"
-        print("All 7 API methods present.")
+        print("All 8 API methods present.")
 
         # Verify _parse_json helper.
         assert _parse_json('{"a":1}') == {"a": 1}

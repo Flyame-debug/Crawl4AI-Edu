@@ -126,6 +126,7 @@ async def crawl(
     resume_path: str | None = None,
     task_type: str = "full",
     preview_limit: int = 10,
+    user_prompt: str | None = None,
 ) -> Statistics | None:
     """Run a breadth-first crawl.
 
@@ -213,6 +214,8 @@ async def crawl(
                 start_resp: dict = await client.start_crawl_task(
                     seed_url=s_url, max_depth=md,
                     config={"max_concurrent": mc, "request_delay": rd} if mc or rd else None,
+                    task_type="formal",
+                    user_prompt=seed.get("user_prompt"),
                 )
                 tid = start_resp.get("task_id", "")
                 if not tid:
@@ -229,6 +232,7 @@ async def crawl(
                     config_path=None, api_client=client,
                     task_id=tid, seed_meta=seed,
                     task_type="full", preview_limit=10,
+                    user_prompt=seed.get("user_prompt"),
                 )
                 await client.report_task_result(
                     task_id=tid, status="completed",
@@ -318,6 +322,12 @@ async def crawl(
 
     if use_api and seed_url is None:
         logger.info("Starting API worker mode (poll_interval=%ds)", poll_interval)
+        # Health check before entering the polling loop.
+        healthy: bool = await api_client.check_health()
+        if not healthy:
+            logger.warning(
+                "Backend health check failed — worker will continue but API calls may fail."
+            )
         graceful_enabled = not no_graceful and os.getenv("ENABLE_GRACEFUL_EXIT", "1") != "0"
         shutdown_event = asyncio.Event()
         if graceful_enabled:
@@ -337,6 +347,8 @@ async def crawl(
         task_resp: dict = await api_client.start_crawl_task(
             seed_url=seed_url, max_depth=max_depth,
             config={"max_concurrent": max_concurrent, "request_delay": request_delay} if max_concurrent or request_delay else None,
+            task_type="formal",
+            user_prompt=seed_meta.get("user_prompt") if seed_meta else None,
         )
         task_id: str = task_resp.get("task_id", "")
         await api_client.update_seed_status(seed_url, "crawling")
@@ -347,6 +359,7 @@ async def crawl(
             config_path=config_path, api_client=api_client,
             task_id=task_id, seed_meta=seed_meta,
             task_type="full", preview_limit=10,
+            user_prompt=seed_meta.get("user_prompt") if seed_meta else None,
         )
         await api_client.report_task_result(
             task_id=task_id, status="completed",
@@ -365,6 +378,7 @@ async def crawl(
         white_list_patterns=white_list_patterns, request_delay=request_delay,
         config_path=config_path, seed_urls=seed_urls, output_dir=output_dir,
         resume_path=resume_path, task_type=task_type, preview_limit=preview_limit,
+        user_prompt=user_prompt,
     )
 
 
@@ -390,6 +404,7 @@ async def _run_bfs_crawl(
     resume_path: str | None = None,
     task_type: str = "full",
     preview_limit: int = 10,
+    user_prompt: str | None = None,
 ) -> Statistics:
     """Core BFS crawl engine — processes one seed URL breadth-first.
 
@@ -398,6 +413,8 @@ async def _run_bfs_crawl(
     goes to the local filesystem (no API calls).
     """
     _is_preview = task_type == "preview"
+    # Map legacy "full" → V2 "formal" for API calls.
+    _api_task_type: str = "formal" if task_type == "full" else task_type
 
     # --- Resolve config -------------------------------------------------------
     cfg: dict[str, Any] = {}
@@ -526,6 +543,8 @@ async def _run_bfs_crawl(
                     image_concurrency=_max_concurrent,
                     output_dir=_output_dir,
                     mapping_path=_mapping_path,
+                    task_type=_api_task_type,
+                    user_prompt=user_prompt,
                 )
                 # On success, record URL for checkpoint/resume.
                 if result.get("success") and _writer_task is not None:
