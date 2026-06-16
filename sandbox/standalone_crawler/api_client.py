@@ -90,10 +90,10 @@ class APIClient:
         """
         url = f"{self._base_url}/api/seeds/pending/?limit={limit}"
         data = await self._request("GET", url)
-        # Map V2 pagination format {"count": N, "results": [...]} → {"count": N, "seeds": [...]}.
+        # Map V2 pagination format {"count": N, "seeds": [...]} → {"count": N, "seeds": [...]}.
         return {
-            "count": data.get("count", len(data.get("results", []))),
-            "seeds": data.get("results", []),
+            "count": data.get("count", len(data.get("seeds", []))),
+            "seeds": data.get("seeds", []),
         }
 
     # ------------------------------------------------------------------

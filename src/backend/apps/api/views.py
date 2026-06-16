@@ -1242,8 +1242,9 @@ def task_preview_api(request, task_id):
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
-        pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
-        
+        task_id_str = str(task.task_id)
+        pages = PageSnapshot.objects.filter(task_id=task_id_str).order_by('-created_at')[:limit]
+
         preview = []
         for page in pages:
             if page.extracted_data:
@@ -1260,7 +1261,7 @@ def task_preview_api(request, task_id):
             'code': 200,
             'msg': 'success',
             'data': {
-                'total': PageSnapshot.objects.filter(task=task).count(),
+                'total': PageSnapshot.objects.filter(task_id=task_id_str).count(),
                 'preview': preview
             }
         })
