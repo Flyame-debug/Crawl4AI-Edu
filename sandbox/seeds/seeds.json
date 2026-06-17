@@ -1,0 +1,12 @@
+[
+  {"url": "http://faculty.hust.edu.cn/cuisheng/zh_CN/index.htm", "status": "pending", "user_prompt": "提取该教师的姓名、职称、研究方向、联系方式等基本信息"},
+  {"url": "http://faculty.hust.edu.cn/penggang3/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/liuyuliang/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/liuzonghao/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/LongQie/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/xuhenghui/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/LONGCHENGXU/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/tangbin/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/zhangpan1/zh_CN/index.htm", "status": "pending"},
+  {"url": "http://faculty.hust.edu.cn/huangchaohui1/zh_CN/index.htm", "status": "pending"}
+]
