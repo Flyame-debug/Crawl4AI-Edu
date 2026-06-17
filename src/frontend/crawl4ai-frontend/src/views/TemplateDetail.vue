@@ -1,265 +1,107 @@
 <template>
   <div class="template-detail">
-    <!-- 模板标题和简介 -->
-    <h2 v-if="!editMode">{{ template.name }}</h2>
-    <p v-if="!editMode" class="subtitle">{{ template.description }}</p>
+    <!-- 顶部简介卡片 -->
+    <el-card class="intro-card" shadow="hover">
+      <h2>{{ template.name }}</h2>
+      <p>{{ template.description }}</p>
+      <el-tag>{{ template.category || '未分类' }}</el-tag>
+    </el-card>
 
-    <!-- 编辑模式 -->
-    <div v-if="editMode" class="edit-form">
-      <el-form label-position="top">
-        <el-form-item label="模板标题">
-          <el-input v-model="template.name" />
-        </el-form-item>
-        <el-form-item label="模板简介">
-          <el-input v-model="template.description" type="textarea" />
-        </el-form-item>
-        <el-form-item label="种子URL">
-          <el-input v-model="template.seed_url" />
-        </el-form-item>
+    <div class="content-area">
+      <!-- 左侧主体卡片 -->
+      <div class="main-card" :class="{ shrink: codeExpanded }">
+        <el-card shadow="hover">
+          <el-tabs v-model="activeTab" type="card">
+            <el-tab-pane label="配置" name="config">
+              <ConfigPanel :template="template" />
+            </el-tab-pane>
+            <el-tab-pane label="概述信息" name="overview">
+              <OverviewPanel :template="template" />
+            </el-tab-pane>
+            <el-tab-pane label="任务列表" name="tasks">
+              <TaskListPanel :template="template" />
+            </el-tab-pane>
+            <el-tab-pane label="统计" name="stats">
+              <StatsPanel :template="template" />
+            </el-tab-pane>
+          </el-tabs>
+        </el-card>
+      </div>
 
-        <!-- AI提示词 -->
-        <div class="prompt-inputs">
-          <el-form-item
-            v-for="(prompt, index) in template.prompts"
-            :key="index"
-            :label="'提示词 ' + (index + 1)"
-          >
-            <el-input
-              v-model="template.prompts[index]"
-              maxlength="20"
-              show-word-limit
-              placeholder="请输入提示词"
-            />
-            <small class="hint">请输入名词或短语</small>
-          </el-form-item>
+      <!-- 右侧代码示例 -->
+      <div class="code-sidebar" :class="{ expanded: codeExpanded }">
+        <div v-if="!codeExpanded" class="vertical-toggle" @click="toggleCode">
+          <div class="arrow-left">
+            <el-icon class="arrow-icon"><ArrowLeft /></el-icon>
+            <span class="vertical-text">&lt;/&gt; 代码示例</span>
+          </div>
         </div>
-      </el-form>
-      <div class="edit-actions">
-        <el-button type="primary" @click="saveChanges">保存修改</el-button>
-        <el-button @click="editMode = false">取消</el-button>
+        <div v-else class="code-expanded">
+          <div class="toolbar">
+            <el-icon class="arrow-icon collapse-toggle" @click="toggleCode"><ArrowRight /></el-icon>
+            <div class="selector">
+              <div class="fake-select" @click="showMenu = !showMenu">
+                {{ codeTab }}
+                <el-icon class="caret"><ArrowDown /></el-icon>
+              </div>
+              <div v-if="showMenu" class="dropdown">
+                <div class="item" @click="selectTab('XPath')">XPath</div>
+                <div class="item" @click="selectTab('CSS')">CSS</div>
+              </div>
+            </div>
+            <el-button type="text" class="copy-btn" @click="copyCode">
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+          </div>
+          <div class="code-box">
+            <pre v-if="codeTab === 'XPath'">{{ xpathExample }}</pre>
+            <pre v-else>{{ cssExample }}</pre>
+          </div>
+        </div>
       </div>
     </div>
-
-    <!-- 控制按钮区 -->
-    <div class="collect-buttons" v-if="!editMode">
-      <el-button type="primary" @click="editMode = true">编辑模板</el-button>
-
-      <el-button
-        type="primary"
-        :disabled="collectState === 'collecting'"
-        @click="handleCollect"
-      >
-        {{ collectState === 'idle' ? '开始采集' : '继续采集' }}
-      </el-button>
-
-      <el-button
-        v-if="collectState !== 'idle'"
-        type="warning"
-        circle
-        :disabled="collectState === 'paused'"
-        @click="pauseCollect"
-      >
-        <el-icon><VideoPause /></el-icon>
-      </el-button>
-
-      <el-button
-        v-if="collectState !== 'idle'"
-        type="danger"
-        circle
-        @click="endCollect"
-      >
-        <el-icon><Close /></el-icon>
-      </el-button>
-    </div>
-
-    <!-- 使用方法 -->
-    <section class="usage" v-if="!editMode">
-      <h3>使用方法</h3>
-      <ul>
-        <li>点击“编辑模板”按钮进入编辑模式，修改模板信息和提示词。</li>
-        <li>编辑完成后点击“保存修改”按钮保存更改。</li>
-        <li>点击“开始采集”按钮启动数据采集过程。</li>
-        <li>采集中可以点击暂停或结束按钮控制采集状态。</li>
-      </ul>  
-      <p v-if="!template.prompts || !template.prompts.length">暂无提示词</p>
-    </section>
-
-    <!-- 注意事项 -->
-    <section class="notes" v-if="!editMode">
-      <h3>注意事项</h3>
-      <p>{{ template.notes || '暂无注意事项' }}</p>
-    </section>
-
-    <!-- 进度显示 -->
-    <section class="progress" v-if="!editMode && collectState === 'collecting'">
-      <h3>采集进度</h3>
-      <el-progress :percentage="progress" status="active"></el-progress>
-      <p>{{ progressMessage }}</p>
-    </section>
-
-    <!-- 数据预览 -->
-    <section class="preview" v-if="!editMode">
-      <h3>采集数据预览</h3>
-      <el-table v-if="previewData.length" :data="previewData" style="width: 100%">
-        <el-table-column prop="name" label="姓名" />
-        <el-table-column prop="title" label="职称" />
-        <el-table-column prop="research" label="研究方向" />
-        <el-table-column prop="email" label="邮箱" />
-      </el-table>
-      <p v-else>暂无数据</p>
-    </section>
   </div>
 </template>
 
 <script>
-import { VideoPause, Close } from '@element-plus/icons-vue'
-import { getTemplateDetail, updateTemplate } from '@/api/templates'
-import { startTask, pauseTask, stopTask, getTaskPreview, getTaskProgress } from '@/api/tasks'
+import ConfigPanel from './ConfigPanel.vue'
+import OverviewPanel from './OverviewPanel.vue'
+import TaskListPanel from './TaskListPanel.vue'
+import StatsPanel from './StatsPanel.vue'
+import { CopyDocument, ArrowLeft, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
 
 export default {
   name: 'TemplateDetail',
-  components: { VideoPause, Close },
+  components: { ConfigPanel, OverviewPanel, TaskListPanel, StatsPanel, CopyDocument, ArrowLeft, ArrowRight, ArrowDown },
   data() {
     return {
-      collectState: 'idle',
-      editMode: false,
-      taskId: null,
-      template: { name: '', description: '', seed_url: '', prompts: ['', '', '', '', ''], notes: '' },
-      previewData: [],
-      progress: 0,
-      progressMessage: '',
-      progressTimer: null
-    }
-  },
-  created() {
-    const id = this.$route.params.id
-    getTemplateDetail(id)
-      .then(res => {
-        if (res.data) {
-          this.template = {
-            ...res.data,
-            prompts: res.data.prompts && res.data.prompts.length ? res.data.prompts : ['', '', '', '', '']
-          }
-          this.previewData = res.data.preview_data || []
-        }
-      })
-      .catch(() => {
-        this.$message.error('获取模板详情失败')
-      })
-  },
-  beforeUnmount() {
-    if (this.progressTimer) {
-      clearInterval(this.progressTimer)
+      activeTab: 'config',
+      codeExpanded: false,
+      codeTab: 'XPath',
+      showMenu: false,
+      template: {
+        name: '教育数据采集',
+        description: '采集高校官网的课程与公告信息',
+        category: '教育'
+      },
+      xpathExample: `//div[@class="course-list"]/div/h3`,
+      cssExample: `.course-list > div > h3`
     }
   },
   methods: {
-    async saveChanges() {
-      const id = this.$route.params.id
-      try {
-        const res = await updateTemplate(id, this.template)
-        this.template = {
-          ...res.data,
-          prompts: res.data.prompts || ['', '', '', '', '']
-        }
-        this.editMode = false
-        this.$message.success('模板更新成功')
-      } catch (e) {
-        this.$message.error('模板更新失败')
-      }
+    toggleCode() {
+      this.codeExpanded = !this.codeExpanded
+      this.showMenu = false
     },
-
-    async handleCollect() {
-      console.log('开始采集，模板ID:', this.$route.params.id)
-      try {
-        const res = await startTask({ 
-          template_id: this.$route.params.id, 
-          config: { max_depth: 3, max_concurrent: 5 } 
-        })
-        console.log('启动响应:', res.data)
-        this.taskId = res.data.task_id
-        this.collectState = 'collecting'
-        this.$message.success(res.data.message || '任务已启动')
-        this.fetchPreview()
-        this.startProgressPolling()
-      } catch (e) {
-        console.error('启动失败:', e)
-        this.$message.error('启动采集任务失败')
-      }
+    copyCode() {
+      const text = this.codeTab === 'XPath' ? this.xpathExample : this.cssExample
+      navigator.clipboard.writeText(text).then(() => {
+        this.$message.success('代码已复制')
+      })
     },
-
-    async pauseCollect() {
-      if (!this.taskId) return
-      try {
-        const res = await pauseTask(this.taskId)
-        this.collectState = 'paused'
-        this.$message.success(res.data.message || '任务已暂停')
-        if (this.progressTimer) clearInterval(this.progressTimer)
-      } catch (e) {
-        this.$message.error('暂停任务失败')
-      }
-    },
-
-    async endCollect() {
-      if (!this.taskId) return
-      try {
-        const res = await stopTask(this.taskId)
-        this.collectState = 'idle'
-        this.previewData = []
-        this.progress = 0
-        this.progressMessage = ''
-        this.$message.success(res.data.message || '任务已停止')
-        if (this.progressTimer) clearInterval(this.progressTimer)
-      } catch (e) {
-        this.$message.error('停止任务失败')
-      }
-    },
-
-    async fetchPreview() {
-      if (!this.taskId) return
-      try {
-        const res = await getTaskPreview(this.taskId, 5)
-        if (res.data && res.data.preview) {
-          this.previewData = res.data.preview
-        }
-      } catch (e) {
-        this.$message.error('获取采集数据预览失败')
-      }
-    },
-
-    startProgressPolling() {
-      if (this.progressTimer) clearInterval(this.progressTimer)
-      this.progressTimer = setInterval(async () => {
-        if (!this.taskId || this.collectState !== 'collecting') return
-        try {
-          const res = await getTaskProgress(this.taskId)
-          console.log('进度更新:', res.data)
-          
-          if (res.data) {
-            this.progress = res.data.percent || 0
-            this.progressMessage = res.data.message || ''
-            
-            if (res.data.status === 'completed') {
-              this.collectState = 'idle'
-              this.progress = 100
-              this.progressMessage = '采集完成！'
-              clearInterval(this.progressTimer)
-              this.$message.success('采集任务已完成')
-              this.fetchPreview()
-            } else if (res.data.status === 'failed') {
-              this.collectState = 'idle'
-              clearInterval(this.progressTimer)
-              this.$message.error('采集任务失败')
-              this.fetchPreview()
-            } else if (res.data.status === 'stopped') {
-              this.collectState = 'idle'
-              clearInterval(this.progressTimer)
-              this.$message.info('采集任务已停止')
-            }
-          }
-        } catch (e) {
-          console.error('获取任务进度失败:', e)
-        }
-      }, 3000)
+    selectTab(tab) {
+      this.codeTab = tab
+      this.showMenu = false
     }
   }
 }
@@ -269,42 +111,152 @@ export default {
 .template-detail {
   padding: 20px;
 }
-.subtitle {
-  font-size: 14px;
-  color: #666;
+
+/* 顶部简介卡片统一宽度 + 大圆角 */
+.intro-card {
+  border-radius: 20px; /* 圆角更大 */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   margin-bottom: 20px;
+  
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
-.collect-buttons {
+
+.content-area {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+/* 主体卡片本身圆角更大 + 内部卡片限制宽度 */
+.main-card {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  transition: flex 0.3s ease;
+  border-radius: 20px; /* 主体卡片圆角更大 */
+}
+.main-card.shrink {
+  flex: 0.7;
+}
+.main-card > .el-card {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  border-radius: 20px; /* 内部卡片也保持一致圆角 */
+}
+
+/* Tab 栏选中高亮蓝线 */
+::v-deep(.el-tabs__item.is-active) {
+  color: #409EFF !important; /* 蓝色高亮 */
+  font-weight: 600;          /* 加粗 */
+  border-bottom: 3px solid #409EFF !important; /* 粗蓝线 */
+}
+::v-deep(.el-tabs__item) {
+  transition: all 0.3s ease;
+}
+::v-deep(.el-tabs__nav-wrap::after) {
+  display: none; /* 去掉默认灰色下划线 */
+}
+
+/* 右侧代码示例保持原样 */
+.vertical-toggle {
+  background: #1e1e1e;
+  border-radius: 6px;
+  height: 500px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
+  justify-content: center;
+  margin-left: 20px;
 }
-.edit-actions {
-  margin-top: 20px;
+.arrow-left {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
 }
-.prompt-inputs {
-  margin-top: 20px;
+.arrow-icon {
+  color: #fff;
+  font-size: 18px;
+  margin-bottom: 6px;
 }
-.hint {
+.vertical-text {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  font-weight: normal;
+}
+.code-sidebar.expanded {
+  flex: 0.3;
+  background: #1e1e1e;
+  border-radius: 14px;
+  height: 500px;
+  display: flex;
+  flex-direction: column;
+  margin-left: 20px;
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #fff;
+  padding: 6px 10px;
+}
+.collapse-toggle {
+  cursor: pointer;
+}
+.selector {
+  flex: 1;
+  margin: 0 10px;
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+.fake-select {
+  background: #1e1e1e;
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
-  color: #888;
+  font-weight: normal;
 }
-section {
-  margin-top: 20px;
+.fake-select .caret {
+  margin-left: 6px;
 }
-.progress {
-  margin-top: 20px;
+.dropdown {
+  position: absolute;
+  top: 28px;
+  background: #1e1e1e;
+  border-radius: 4px;
+  color: #fff;
+  min-width: 80px;
 }
-.preview {
-  margin-top: 20px;
+.dropdown .item {
+  padding: 6px 10px;
+  cursor: pointer;
 }
-.notes {
-  margin-top: 20px;
+.dropdown .item:hover {
+  background: #333;
 }
-.usage {
-  margin-top: 20px;
+.copy-btn {
+  color: #fff;
+}
+.code-box {
+  flex: 1;
+  background: #000;
+  color: #eee;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: auto;
+  overflow-y: auto;
+  height: 420px;
 }
 </style>
+
