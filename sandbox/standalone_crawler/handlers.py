@@ -1,21 +1,24 @@
 """Single-page processing handler.
 
-Fetches HTML, downloads/upload images (API mode) or saves locally, extracts links.
-Supports two modes:
+Fetches HTML, converts to Markdown via Crawl4AI (with fallback), downloads/upload
+images (API mode) or saves locally, extracts links.  Supports two modes:
 
 - **API mode** (``api_client`` provided): images are downloaded as bytes,
   converted to base64, uploaded via the backend API, and the page snapshot is
-  saved through ``save_page_snapshot``. Images are NOT written to local disk.
+  saved through ``save_page_snapshot`` with both ``html`` and ``markdown``
+  fields. Images are NOT written to local disk.
 
-- **Local mode** (``api_client`` is ``None``): the original behaviour is preserved
-  — fetch HTML, extract links, no local file persistence.  (Image download and
-  local HTML saving can be added later without changing the API-mode path.)
+- **Local mode** (``api_client`` is ``None``): HTML is saved as ``.html``,
+  Markdown as ``.md``, and images are downloaded to disk.  A URL-to-file
+  mapping is recorded in ``mapping.txt``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -35,6 +38,9 @@ from urllib.parse import urljoin
 from fetcher import FetchError, async_fetch
 from link import extract_links
 
+from crawler.anti_detect import analyze_anti_crawl
+
+from .crawl4ai_client import convert_with_crawl4ai
 from .utils import get_logger, normalize_url
 
 if TYPE_CHECKING:
@@ -66,6 +72,8 @@ async def process_page(
     image_concurrency: int = _DEFAULT_IMAGE_CONCURRENCY,
     output_dir: str | None = None,
     mapping_path: str | None = None,
+    task_type: str | None = None,
+    user_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Process a single page: fetch → (upload images) → extract links.
 
@@ -80,6 +88,8 @@ async def process_page(
         task_id: Crawl task ID (required when *api_client* is provided).
         seed_meta: Optional seed metadata dict (may contain ``category``, ``school``).
         image_concurrency: Max concurrent image uploads (API mode only).
+        task_type: ``"preview"`` or ``"formal"`` (V2, for pagesnapshot API).
+        user_prompt: User extraction instruction (V2, for pagesnapshot API).
 
     Returns:
         A dict with keys ``success``, ``url``, ``depth``, ``links``,
@@ -96,6 +106,8 @@ async def process_page(
         "links": [],
         "images": [],
         "error": None,
+        "html": None,
+        "markdown": None,
     }
 
     # 1. Fetch HTML ------------------------------------------------------------
@@ -104,11 +116,38 @@ async def process_page(
     except FetchError as exc:
         result["error"] = str(exc)
         logger.warning("Fetch failed for %s: %s", url, exc)
+        # --- Anti-crawl check: parse status code from error message ---------
+        _status_match = re.search(r"HTTP (\d+)", str(exc))
+        _status_code: int = int(_status_match.group(1)) if _status_match else 0
+        _anti_result: dict[str, Any] = analyze_anti_crawl(url, None, _status_code)
+        if _anti_result["has_encryption"]:
+            logger.warning(
+                "Anti-crawl signal on failure for %s: %s", url, _anti_result["message"],
+            )
+            result["anti_crawl"] = _anti_result
         return result
     except Exception as exc:
         result["error"] = f"Unexpected fetch error: {exc}"
         logger.error("Unexpected error fetching %s: %s", url, exc)
         return result
+
+    result["html"] = html
+
+    # --- Anti-crawl content check (even on HTTP 200) --------------------------
+    _anti_check: dict[str, Any] = analyze_anti_crawl(url, html, 200)
+    if _anti_check["has_encryption"]:
+        logger.warning(
+            "Anti-crawl signal in content for %s: %s", url, _anti_check["message"],
+        )
+        result["anti_crawl"] = _anti_check
+
+    # 1.5 Convert HTML → Markdown via Crawl4AI (with fallback) -----------------
+    try:
+        markdown: str = await convert_with_crawl4ai(html)
+    except Exception as exc:
+        logger.warning("Markdown conversion entirely failed for %s: %s — using raw HTML as markdown.", url, exc)
+        markdown = html
+    result["markdown"] = markdown
 
     # 2. Handle images & page persistence --------------------------------------
     images_for_result: list[dict[str, str]] = []
@@ -124,32 +163,39 @@ async def process_page(
             )
             await api_client.save_page_snapshot(
                 url=url,
-                markdown=html,
+                markdown=markdown,
+                task_id=task_id,
+                task_type=task_type,
+                user_prompt=user_prompt,
                 category=category,
                 images=images_for_result if images_for_result else None,
+                raw_html=html,
             )
             logger.info("Page snapshot saved via API: %s (images=%d)", url, len(images_for_result))
         except Exception as exc:
             logger.error("API upload failed for %s: %s — continuing.", url, exc)
             # Do not abort — link extraction still proceeds.
     else:
-        # --- Local mode: save HTML + download images to disk ------------------
+        # --- Local mode: save HTML + Markdown + download images to disk -------
         html_path: str | None = None
+        md_path: str | None = None
         img_paths: list[str] = []
         if output_dir:
             try:
-                html_path, img_paths = await _save_page_locally(
-                    html, url, output_dir, concurrency=image_concurrency,
+                html_path, md_path, img_paths = await _save_page_locally(
+                    html, markdown, url, output_dir, concurrency=image_concurrency,
                 )
-                logger.info("Local save: html=%s images=%d for %s", html_path, len(img_paths), url)
+                logger.info("Local save: html=%s md=%s images=%d for %s",
+                            html_path, md_path, len(img_paths), url)
                 # Append URL→file mapping.
                 if mapping_path:
                     img_str = ",".join(img_paths)
                     with open(mapping_path, "a", encoding="utf-8") as mf:
-                        mf.write(f"{url}|{html_path}|{img_str}\n")
+                        mf.write(f"{url}|{html_path}|{md_path}|{img_str}\n")
             except Exception as exc:
                 logger.error("Local save failed for %s: %s", url, exc)
         result["html_path"] = html_path
+        result["md_path"] = md_path
         result["images"] = img_paths
         images_for_result = [{"original_url": p, "stored_url": p} for p in img_paths]
 
@@ -191,21 +237,24 @@ async def process_page(
 
 async def _save_page_locally(
     html: str,
+    markdown: str,
     base_url: str,
     output_dir: str,
     concurrency: int = _DEFAULT_IMAGE_CONCURRENCY,
-) -> tuple[str | None, list[str]]:
-    """Save HTML to disk and download all referenced images in local mode.
+) -> tuple[str | None, str | None, list[str]]:
+    """Save HTML and Markdown to disk and download all referenced images.
 
-    Returns a tuple of ``(html_path, list_of_image_paths)``.  Image paths are
-    relative to the project root (e.g. ``sandbox/data/images/abc.jpg``).
+    Returns a tuple of ``(html_path, md_path, list_of_image_paths)``.  Paths are
+    relative to the project root (e.g. ``sandbox/data/html/abc.html``).
     """
     from pathlib import Path
     import hashlib
 
     html_dir = Path(output_dir) / "html"
+    md_dir = Path(output_dir) / "md"
     img_dir = Path(output_dir) / "images"
     html_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
     img_dir.mkdir(parents=True, exist_ok=True)
 
     # -- Save HTML -----------------------------------------------------------
@@ -213,6 +262,11 @@ async def _save_page_locally(
     html_file = html_dir / f"{url_hash}.html"
     html_file.write_text(html, encoding="utf-8")
     html_rel = str(html_file.relative_to(html_file.parent.parent.parent))
+
+    # -- Save Markdown -------------------------------------------------------
+    md_file = md_dir / f"{url_hash}.md"
+    md_file.write_text(markdown, encoding="utf-8")
+    md_rel = str(md_file.relative_to(md_file.parent.parent.parent))
 
     # -- Extract image URLs --------------------------------------------------
     soup = BeautifulSoup(html, "html.parser")
@@ -227,7 +281,7 @@ async def _save_page_locally(
         img_urls.append(urljoin(base_url, src))
 
     if not img_urls:
-        return html_rel, []
+        return html_rel, md_rel, []
 
     unique_urls = list(dict.fromkeys(img_urls))
     semaphore = asyncio.Semaphore(concurrency)
@@ -299,7 +353,7 @@ async def _save_page_locally(
         elif isinstance(r, Exception):
             logger.error("Image download worker crashed: %s", r)
 
-    return html_rel, img_paths
+    return html_rel, md_rel, img_paths
 
 
 # ===================================================================

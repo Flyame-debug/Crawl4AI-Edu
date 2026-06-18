@@ -32,6 +32,8 @@ for _p in (_sandbox, _project_root):
 
 from link import create_bloom_filter
 
+from crawler.quality_report import generate_quality_report
+
 from .handlers import process_page
 from .stats import Statistics
 from .utils import ensure_dir, get_logger, normalize_url
@@ -121,6 +123,10 @@ async def crawl(
     seed_urls: list[str] | None = None,
     output_dir: str | None = None,
     no_graceful: bool = False,
+    resume_path: str | None = None,
+    task_type: str = "full",
+    preview_limit: int = 10,
+    user_prompt: str | None = None,
 ) -> Statistics | None:
     """Run a breadth-first crawl.
 
@@ -135,6 +141,11 @@ async def crawl(
         under normal operation.  Set *seed_list* to crawl specific seeds via
         API without polling (used by ``--use-api --seed …``).
 
+    **Preview mode** (``task_type="preview"``):
+        Crawls at most *preview_limit* pages, saves locally to
+        ``sandbox/preview_data/``, and does NOT call any backend API.
+        Intended for quick validation before a full crawl.
+
     Args:
         seed_url: Starting URL (required in local mode).
         max_depth: Maximum BFS depth (seed = 0).
@@ -147,6 +158,9 @@ async def crawl(
         api_client: :class:`APIClient` instance for backend integration.
         poll_interval: Seconds between seed-poll cycles (API worker mode).
         seed_list: Explicit seed dicts for one-shot API crawl (optional).
+        task_type: ``"preview"`` or ``"full"`` (default).  Preview mode limits
+            pages and skips backend API calls.
+        preview_limit: Max pages in preview mode (default 10).
 
     Returns:
         :class:`Statistics` in local mode; ``None`` in continuous API worker
@@ -200,6 +214,8 @@ async def crawl(
                 start_resp: dict = await client.start_crawl_task(
                     seed_url=s_url, max_depth=md,
                     config={"max_concurrent": mc, "request_delay": rd} if mc or rd else None,
+                    task_type="formal",
+                    user_prompt=seed.get("user_prompt"),
                 )
                 tid = start_resp.get("task_id", "")
                 if not tid:
@@ -215,6 +231,8 @@ async def crawl(
                     white_list_patterns=wp, request_delay=rd,
                     config_path=None, api_client=client,
                     task_id=tid, seed_meta=seed,
+                    task_type="full", preview_limit=10,
+                    user_prompt=seed.get("user_prompt"),
                 )
                 await client.report_task_result(
                     task_id=tid, status="completed",
@@ -304,6 +322,12 @@ async def crawl(
 
     if use_api and seed_url is None:
         logger.info("Starting API worker mode (poll_interval=%ds)", poll_interval)
+        # Health check before entering the polling loop.
+        healthy: bool = await api_client.check_health()
+        if not healthy:
+            logger.warning(
+                "Backend health check failed — worker will continue but API calls may fail."
+            )
         graceful_enabled = not no_graceful and os.getenv("ENABLE_GRACEFUL_EXIT", "1") != "0"
         shutdown_event = asyncio.Event()
         if graceful_enabled:
@@ -323,6 +347,8 @@ async def crawl(
         task_resp: dict = await api_client.start_crawl_task(
             seed_url=seed_url, max_depth=max_depth,
             config={"max_concurrent": max_concurrent, "request_delay": request_delay} if max_concurrent or request_delay else None,
+            task_type="formal",
+            user_prompt=seed_meta.get("user_prompt") if seed_meta else None,
         )
         task_id: str = task_resp.get("task_id", "")
         await api_client.update_seed_status(seed_url, "crawling")
@@ -332,6 +358,8 @@ async def crawl(
             white_list_patterns=white_list_patterns, request_delay=request_delay,
             config_path=config_path, api_client=api_client,
             task_id=task_id, seed_meta=seed_meta,
+            task_type="full", preview_limit=10,
+            user_prompt=seed_meta.get("user_prompt") if seed_meta else None,
         )
         await api_client.report_task_result(
             task_id=task_id, status="completed",
@@ -349,6 +377,8 @@ async def crawl(
         enable_dead_check=enable_dead_check, allowed_domains=allowed_domains,
         white_list_patterns=white_list_patterns, request_delay=request_delay,
         config_path=config_path, seed_urls=seed_urls, output_dir=output_dir,
+        resume_path=resume_path, task_type=task_type, preview_limit=preview_limit,
+        user_prompt=user_prompt,
     )
 
 
@@ -371,11 +401,21 @@ async def _run_bfs_crawl(
     seed_meta: dict[str, Any] | None = None,
     seed_urls: list[str] | None = None,
     output_dir: str | None = None,
+    resume_path: str | None = None,
+    task_type: str = "full",
+    preview_limit: int = 10,
+    user_prompt: str | None = None,
 ) -> Statistics:
     """Core BFS crawl engine — processes one seed URL breadth-first.
 
-    All parameters mirror those of :func:`crawl`.
+    In preview mode (*task_type* ``"preview"``) the engine stops after
+    *preview_limit* successful pages regardless of depth, and all output
+    goes to the local filesystem (no API calls).
     """
+    _is_preview = task_type == "preview"
+    # Map legacy "full" → V2 "formal" for API calls.
+    _api_task_type: str = "formal" if task_type == "full" else task_type
+
     # --- Resolve config -------------------------------------------------------
     cfg: dict[str, Any] = {}
     if config_path is not None:
@@ -387,9 +427,42 @@ async def _run_bfs_crawl(
     _allowed_domains = allowed_domains if allowed_domains is not None else cfg.get("default_allowed_domains", [])
     _white_patterns = white_list_patterns if white_list_patterns is not None else cfg.get("white_list_patterns", [])
 
+    if _is_preview:
+        logger.info("预览模式 (Preview Mode): 最多抓取 %d 个页面", preview_limit)
+
     dead_checker = _check_dead_links
     if enable_dead_check and dead_checker is None:
         logger.warning("enable_dead_check=True but dead_link_checker is not available; skipped.")
+
+    # --- Resume / checkpoint support ------------------------------------------
+    _crawled_set: set[str] = set()
+    _resume_queue: asyncio.Queue[str | None] = asyncio.Queue()
+    _resume_lock = asyncio.Lock()
+
+    if resume_path and api_client is None:
+        _rp = Path(resume_path)
+        if _rp.is_file():
+            _crawled_set = set(
+                line.strip() for line in _rp.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            logger.info("Resume: loaded %d already-crawled URL(s) from %s", len(_crawled_set), resume_path)
+
+        async def _resume_writer() -> None:
+            """Background task that drains the queue and appends to resume file."""
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            with open(_rp, "a", encoding="utf-8") as f:
+                while True:
+                    u = await _resume_queue.get()
+                    if u is None:  # Sentinel to stop.
+                        break
+                    f.write(u + "\n")
+                    f.flush()
+            logger.info("Resume writer stopped — file saved to %s", resume_path)
+
+        _writer_task = asyncio.create_task(_resume_writer())
+    else:
+        _writer_task = None
 
     stats = Statistics()
     stats.start()
@@ -402,36 +475,65 @@ async def _run_bfs_crawl(
     if api_client is None:
         _mapping_path = f"{_output_dir}/mapping.txt"
     ensure_dir(f"{_output_dir}/html")
+    ensure_dir(f"{_output_dir}/md")
     ensure_dir(f"{_output_dir}/images")
 
     # Build initial seed list: either from seed_urls or single seed_url.
+    skipped_resume: int = 0
     if seed_urls:
         initial_urls: list[str] = []
         for u in seed_urls:
             nu = normalize_url(u)
+            if nu in _crawled_set:
+                skipped_resume += 1
+                continue
             if not bloom.contains(nu):
                 bloom.add(nu)
                 initial_urls.append(nu)
-        logger.info("Loaded %d unique seed URLs (from %d input)", len(initial_urls), len(seed_urls))
+        logger.info("Loaded %d unique seed URLs (from %d input), skipped %d already-crawled",
+                     len(initial_urls), len(seed_urls), skipped_resume)
     else:
         seed_norm = normalize_url(seed_url)
+        if seed_norm in _crawled_set:
+            logger.info("Seed URL already crawled in previous session — nothing to do.")
+            if _writer_task:
+                await _resume_queue.put(None)
+                await _writer_task
+            stats.stop()
+            return stats
         bloom.add(seed_norm)
         initial_urls = [seed_norm]
 
     semaphore = asyncio.Semaphore(_max_concurrent)
     current_level: list[str] = initial_urls
+    _preview_pages_done: int = 0  # Counter for preview mode page limit.
+    _all_page_results: list[dict[str, Any]] = []  # Accumulate for quality report.
 
     for depth in range(_max_depth + 1):
         if not current_level:
             logger.info("No more URLs at depth %d — crawl finished.", depth)
             break
 
+        # Preview mode: enforce page limit before processing this level.
+        if _is_preview and _preview_pages_done >= preview_limit:
+            logger.info(
+                "预览模式: 已达到上限 %d 页, 停止抓取 (depth=%d).",
+                preview_limit, depth,
+            )
+            break
+
         logger.info("Depth %d: processing %d URL(s) (max_concurrent=%d)…",
                      depth, len(current_level), _max_concurrent)
 
         async def _worker(url: str) -> dict[str, Any]:
+            # Skip already-crawled URLs (resume mode).
+            if url in _crawled_set:
+                return {
+                    "success": True, "url": url, "depth": depth,
+                    "links": [], "images": [], "error": None, "skipped": True,
+                }
             async with semaphore:
-                return await process_page(
+                result = await process_page(
                     url, depth, bloom,
                     allowed_domains=_allowed_domains,
                     white_list_patterns=_white_patterns,
@@ -441,7 +543,13 @@ async def _run_bfs_crawl(
                     image_concurrency=_max_concurrent,
                     output_dir=_output_dir,
                     mapping_path=_mapping_path,
+                    task_type=_api_task_type,
+                    user_prompt=user_prompt,
                 )
+                # On success, record URL for checkpoint/resume.
+                if result.get("success") and _writer_task is not None:
+                    await _resume_queue.put(url)
+                return result
 
         results = await asyncio.gather(
             *[_worker(u) for u in current_level], return_exceptions=True,
@@ -463,9 +571,20 @@ async def _run_bfs_crawl(
                 continue
 
             stats.add_result(result)
+            _all_page_results.append(result)
 
             if not result.get("success"):
                 continue
+
+            # Preview mode: increment completed page counter.
+            if _is_preview:
+                _preview_pages_done += 1
+                if _preview_pages_done >= preview_limit:
+                    # Do not queue more links for the next level.
+                    logger.info(
+                        "预览模式: %d/%d 页面已完成, 不再收集新链接.",
+                        _preview_pages_done, preview_limit,
+                    )
 
             new_links: list[str] = result.get("links", [])
 
@@ -482,15 +601,41 @@ async def _run_bfs_crawl(
                 except Exception as exc:
                     logger.warning("Dead-link check raised an error: %s — continuing.", exc)
 
+            # Preview mode: stop collecting links once limit is reached.
+            if _is_preview and _preview_pages_done >= preview_limit:
+                continue
+
             for link in new_links:
                 if not bloom.contains(link):
                     bloom.add(link)
                     next_level.append(link)
 
-        current_level = next_level
+        # Preview mode: stop descending if limit already reached.
+        if _is_preview and _preview_pages_done >= preview_limit:
+            logger.info("预览模式: 已收集 %d 页, 停止继续抓取.", _preview_pages_done)
+            current_level = []
+        else:
+            current_level = next_level
+
+    # --- Stop resume writer and clean up ---------------------------------------
+    if _writer_task is not None:
+        await _resume_queue.put(None)   # Sentinel to stop writer.
+        await _writer_task
 
     stats.stop()
     logger.info("Crawl complete.  %d pages processed.", stats.total)
+
+    # --- Generate quality report ---------------------------------------------
+    _report_dir: str = f"{_output_dir}/reports"
+    try:
+        _report_path: str = generate_quality_report(
+            stats, _all_page_results, _report_dir,
+            task_label=task_type,
+        )
+        logger.info("Quality report saved: %s", _report_path)
+    except Exception as exc:
+        logger.warning("Failed to generate quality report: %s", exc)
+
     return stats
 
 

@@ -76,6 +76,9 @@ def _default_config() -> dict[str, Any]:
         "max_depth": 2,
         "timeout": 30,
         "max_retries": 2,
+        "use_render": False,
+        "render_for_depth": [],
+        "render_wait_time": 2,
     }
 
 
