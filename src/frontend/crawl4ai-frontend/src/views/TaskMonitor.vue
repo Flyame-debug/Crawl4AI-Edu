@@ -5,7 +5,7 @@
       <div class="filters">
         <div class="filter-row">
           <el-select v-model="filters.type" placeholder="任务类型" style="width: 160px; margin-right: 10px;">
-            <el-option label="正式采集" value="full" />
+            <el-option label="正式采集" value="formal" />
             <el-option label="预览采集" value="preview" />
           </el-select>
           <el-select v-model="filters.product" placeholder="产品" style="width: 160px; margin-right: 10px;">
@@ -63,8 +63,8 @@
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="exportTask(scope.row, 'markdown')">导出Markdown</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'html')">导出HTML</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'json')">导出JSON</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'csv')">导出CSV</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -78,17 +78,14 @@
 <script>
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { getTasks, getTaskDetail, startTask, downloadTaskResult } from '@/api/tasks'
 
 export default {
-  name: 'TaskList',
+  name: 'TaskMonitor',
   components: { ArrowDown },
   data() {
     return {
-      tasks: [
-        { task_id: 1, task_name: '示例任务A', template_source: '教师信息', executed_at: '2026-06-17 10:00', status: 'success', data_count: 120 },
-        { task_id: 2, task_name: '示例任务B', template_source: '课程信息', executed_at: '2026-06-17 11:30', status: 'running', data_count: 45 },
-        { task_id: 3, task_name: '示例任务C', template_source: '科研成果', executed_at: '2026-06-17 12:15', status: 'failed', data_count: 0 }
-      ],
+      tasks: [],
       loading: false,
       filters: {
         type: '',
@@ -99,7 +96,54 @@ export default {
       }
     }
   },
+  mounted() {
+    this.fetchTasks()
+  },
   methods: {
+    async fetchTasks() {
+      this.loading = true
+      try {
+        const params = {}
+        if (this.filters.type) params.task_type = this.filters.type
+        if (this.filters.product) params.category = this.filters.product
+        if (this.filters.status) params.status = this.filters.status
+        if (this.filters.dateRange && this.filters.dateRange.length === 2) {
+          params.start_date = this.formatDate(this.filters.dateRange[0])
+          params.end_date = this.formatDate(this.filters.dateRange[1])
+        }
+        const res = await getTasks(params)
+        if (res.data.code === 200) {
+          this.tasks = res.data.data.results || res.data.data || []
+        } else {
+          ElMessage.error(res.data.msg || '获取任务列表失败')
+        }
+      } catch (error) {
+        console.error('获取任务列表失败：', error)
+        ElMessage.error('获取任务列表失败，请稍后重试')
+        this.tasks = this.getMockTasks()
+      } finally {
+        this.loading = false
+      }
+    },
+    getMockTasks() {
+      return [
+        { id: 1, task_name: '示例任务A', template_source: '教师信息', executed_at: '2026-06-17 10:00', status: 'success', data_count: 120 },
+        { id: 2, task_name: '示例任务B', template_source: '课程信息', executed_at: '2026-06-17 11:30', status: 'running', data_count: 45 },
+        { id: 3, task_name: '示例任务C', template_source: '科研成果', executed_at: '2026-06-17 12:15', status: 'failed', data_count: 0 }
+      ]
+    },
+    formatDate(date) {
+      if (!date) return ''
+      const d = new Date(date)
+      const year = d.getFullYear()
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    },
+    resetFilters() {
+      this.filters = { type: '', product: '', tool: '', status: '', dateRange: [] }
+      this.fetchTasks()
+    },
     getStatusText(status) {
       const map = { running: '采集中', success: '成功', failed: '失败' }
       return map[status] || status
@@ -108,24 +152,60 @@ export default {
       const map = { running: 'primary', success: 'success', failed: 'danger' }
       return map[status] || 'info'
     },
-    fetchTasks() {
-      ElMessage.success('任务列表已刷新')
-    },
-    resetFilters() {
-      this.filters = { type: '', product: '', tool: '', status: '', dateRange: [] }
-      ElMessage.info('筛选条件已重置')
-    },
-    viewDetail(task) {
-      ElMessageBox.alert(`任务详情：${JSON.stringify(task, null, 2)}`, '详情')
+    async viewDetail(task) {
+      try {
+        const res = await getTaskDetail(task.id)
+        if (res.data.code === 200) {
+          ElMessageBox.alert(JSON.stringify(res.data.data, null, 2), '任务详情')
+        } else {
+          ElMessageBox.alert(JSON.stringify(task, null, 2), '任务详情（本地数据）')
+        }
+      } catch {
+        ElMessageBox.alert(JSON.stringify(task, null, 2), '任务详情')
+      }
     },
     viewLog(task) {
-      ElMessageBox.alert(`日志内容：${task.log || '暂无日志'}`, '日志')
+      ElMessageBox.alert(task.log || '暂无日志信息', '任务日志')
     },
-    rerunTask(task) {
-      ElMessage.success(`任务【${task.task_name}】已重新执行`)
+    async rerunTask(task) {
+      try {
+        await ElMessageBox.confirm(`确认重新执行任务【${task.task_name}】？`, '提示', { type: 'info' })
+        if (!task.template_id) {
+          ElMessage.warning('任务缺少关联模板，无法重新执行')
+          return
+        }
+        await startTask({
+          template_id: task.template_id,
+          task_type: task.task_type || 'formal',
+          user_prompt: task.user_prompt || '',
+          ai_model: task.ai_model || '',
+          ai_api_url: task.ai_api_url || '',
+          ai_api_key: task.ai_api_key || ''
+        })
+        ElMessage.success('任务已重新启动')
+        this.fetchTasks()
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('重新执行失败：', error)
+          ElMessage.error('操作失败')
+        }
+      }
     },
-    exportTask(task, format) {
-      ElMessage.success(`任务【${task.task_name}】已导出${format}`)
+    async exportTask(task, format) {
+      try {
+        const res = await downloadTaskResult(task.id, format)
+        const blob = new Blob([res.data], { type: format === 'json' ? 'application/json' : 'text/csv' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `task_${task.id}.${format}`
+        a.click()
+        URL.revokeObjectURL(url)
+        ElMessage.success('下载成功')
+      } catch (error) {
+        console.error('导出失败：', error)
+        ElMessage.error('导出失败')
+      }
     }
   }
 }
@@ -139,31 +219,26 @@ export default {
   box-sizing: border-box;
   overflow-x: hidden;
 }
-
 .search-card {
   border-radius: 14px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  margin-bottom: 20px;          /* 从40px缩小到20px */
+  margin-bottom: 20px;
   padding: 20px;
   background-color: #fff;
   width: 100%;
   box-sizing: border-box;
 }
-
 .filters {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-
 .filter-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
 }
-
-/* 表格美化 */
 .task-table {
   border: 1px solid #eee;
   border-radius: 14px;
@@ -172,26 +247,21 @@ export default {
   width: 100%;
   table-layout: fixed;
   margin-top: 0;
-  margin-bottom: 20px;          /* 从40px缩小到20px */
+  margin-bottom: 20px;
   box-sizing: border-box;
 }
-
 .task-table th {
   background-color: #fafafa;
   font-weight: 600;
   color: #333;
 }
-
 .task-table td {
   background-color: #fff;
   word-break: break-word;
 }
-
 .task-table .el-table__row:hover {
   background-color: #f5f7fa;
 }
-
-/* 操作按钮组 */
 .op-buttons {
   display: flex;
   gap: 6px;
@@ -202,15 +272,13 @@ export default {
 }
 </style>
 
-<!-- 全局样式：穿透 Element Plus 组件 -->
 <style>
 .short-date-picker {
   width: 120px !important;
   margin-right: 10px;
 }
-
 .task-table .el-table__cell {
-  padding-top: 12px !important;   /* 从18px减小到12px */
+  padding-top: 12px !important;
   padding-bottom: 12px !important;
 }
 </style>
