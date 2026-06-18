@@ -8,6 +8,7 @@
           :data="submissions"
           max-height="500"
           class="submission-table"
+          v-loading="submissionLoading"
         >
           <el-table-column prop="name" label="模板名称" width="220" />
           <el-table-column label="提交时间" width="190">
@@ -33,7 +34,7 @@
                 <el-button size="small" @click="viewDetail(scope.row)">查看详情</el-button>
               </div>
               <div v-else-if="scope.row.status === 'rejected'">
-                <el-button size="small" @click="viewReview(scope.row.id)">查看驳回原因</el-button>
+                <el-button size="small" @click="viewReview(scope.row)">查看驳回原因</el-button>
                 <el-button size="small" @click="editTemplate(scope.row)">重新编辑并提交</el-button>
                 <el-button size="small" type="danger" @click="deleteSubmission(scope.row.id)">删除申请</el-button>
               </div>
@@ -122,7 +123,9 @@
 
         <!-- 提交按钮 -->
         <div class="actions">
-          <el-button type="primary" @click="submitTemplate">提交审核</el-button>
+          <el-button type="primary" @click="submitTemplate" :loading="submitting">
+            {{ editingId ? '提交更新' : '提交审核' }}
+          </el-button>
           <el-button @click="resetForm">重置表单</el-button>
         </div>
       </el-tab-pane>
@@ -160,7 +163,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import { getTemplateHistory, createTemplate, updateTemplate, deleteTemplate } from '@/api/templates'
 
 export default {
   name: 'TemplateCreate',
@@ -168,8 +171,11 @@ export default {
     return {
       activeTab: 'submissions',
       submissions: [],
+      submissionLoading: false,
       detailVisible: false,
       detailRow: null,
+      editingId: null,       // 非 null 时表示编辑模式（驳回重编）
+      submitting: false,
       form: {
         name: '',
         seed_url: '',
@@ -223,16 +229,23 @@ export default {
     this.fetchSubmissions()
   },
   methods: {
+    // 获取我的提交（调用历史模板接口）
     async fetchSubmissions() {
+      this.submissionLoading = true
       try {
-        const res = await axios.get('/api/templates/my-submissions/')
-        if (res.data.code === 200 && res.data.data.results && res.data.data.results.length > 0) {
-          this.submissions = res.data.data.results
-          return
+        const res = await getTemplateHistory()
+        if (res.data.code === 200) {
+          this.submissions = res.data.data.results || res.data.data || []
         }
       } catch {
         console.warn('获取我的提交失败，使用测试假数据')
+        this.loadMockSubmissions()
+      } finally {
+        this.submissionLoading = false
       }
+    },
+    // 假数据兜底
+    loadMockSubmissions() {
       this.submissions = [
         {
           id: 1,
@@ -311,26 +324,42 @@ export default {
       }
       return map[category] || category
     },
-    submitTemplate() {
-      this.$refs.configForm.validate(async valid => {
-        if (!valid) {
-          this.$message.error('请填写所有必填项')
-          return
+    // 提交模板（新建 / 驳回重编）
+    async submitTemplate() {
+      const valid = await this.$refs.configForm.validate().catch(() => false)
+      if (!valid) {
+        this.$message.error('请填写所有必填项')
+        return
+      }
+      this.submitting = true
+      try {
+        const payload = { ...this.form }
+        let res
+        if (this.editingId) {
+          // 驳回重编：调用更新接口
+          res = await updateTemplate(this.editingId, payload)
+        } else {
+          // 新建：调用创建接口
+          res = await createTemplate(payload)
         }
-        try {
-          const res = await axios.post('/api/templates/create/', this.form)
-          if (res.data.code === 200) {
-            this.$message.success('提交成功，等待审核')
-            this.activeTab = 'submissions'
-            this.fetchSubmissions()
-          }
-        } catch {
-          this.$message.error('提交失败')
+        if (res.data.code === 200) {
+          this.$message.success(this.editingId ? '更新成功，等待审核' : '提交成功，等待审核')
+          this.activeTab = 'submissions'
+          this.editingId = null
+          this.resetForm()
+          this.fetchSubmissions()
+        } else {
+          this.$message.error(res.data.msg || '提交失败')
         }
-      })
+      } catch {
+        this.$message.error('提交失败，请稍后重试')
+      } finally {
+        this.submitting = false
+      }
     },
     resetForm() {
       this.$refs.configForm.resetFields()
+      this.editingId = null
       this.form = {
         name: '',
         seed_url: '',
@@ -348,48 +377,68 @@ export default {
         user_prompt: ''
       }
     },
+    // 撤回申请（调用删除接口）
     async withdraw(id) {
       try {
-        await axios.post(`/api/templates/${id}/withdraw/`)
+        await this.$confirm('确认撤回该申请？', '提示', { type: 'warning' })
+        await deleteTemplate(id)
         this.$message.success('撤回成功')
         this.fetchSubmissions()
-      } catch {
-        this.$message.success('撤回成功（测试模式）')
-        this.submissions = this.submissions.filter(s => s.id !== id)
+      } catch (error) {
+        if (error !== 'cancel') {
+          // 接口失败时仍从本地移除（测试模式兜底）
+          this.$message.success('撤回成功（测试模式）')
+          this.submissions = this.submissions.filter(s => s.id !== id)
+        }
       }
     },
+    // 删除申请
     async deleteSubmission(id) {
       try {
-        await axios.delete(`/api/templates/${id}/delete/`)
+        await this.$confirm('确认删除该申请？', '提示', { type: 'warning' })
+        await deleteTemplate(id)
         this.$message.success('删除成功')
         this.fetchSubmissions()
-      } catch {
-        this.$message.success('删除成功（测试模式）')
-        this.submissions = this.submissions.filter(s => s.id !== id)
-      }
-    },
-    async viewReview(id) {
-      try {
-        const res = await axios.get(`/api/templates/${id}/review/`)
-        if (res.data.code === 200) {
-          this.$alert(res.data.data.review_comment, '驳回原因')
-        }
-      } catch {
-        const item = this.submissions.find(s => s.id === id)
-        if (item && item.review_comment) {
-          this.$alert(item.review_comment, '驳回原因')
-        } else {
-          this.$message.warning('暂无驳回信息')
+      } catch (error) {
+        if (error !== 'cancel') {
+          this.$message.success('删除成功（测试模式）')
+          this.submissions = this.submissions.filter(s => s.id !== id)
         }
       }
     },
+    // 查看驳回原因
+    viewReview(row) {
+      if (row.review_comment) {
+        this.$alert(row.review_comment, '驳回原因')
+      } else {
+        this.$message.warning('暂无驳回信息')
+      }
+    },
+    // 查看配置详情弹窗
     viewDetail(row) {
       this.detailRow = { ...row }
       this.detailVisible = true
     },
+    // 驳回重编：回填表单并切换到新建 Tab
     editTemplate(row) {
+      this.editingId = row.id
+      this.form = {
+        name: row.name || '',
+        seed_url: row.seed_url || '',
+        category: row.category || '',
+        description: row.description || '',
+        need_render: row.need_render ?? false,
+        wait_load: row.wait_load ?? 0,
+        enable_cache: row.enable_cache ?? false,
+        timeout: row.timeout ?? 30,
+        ai_enabled: row.ai_enabled ?? false,
+        ai_provider: row.ai_provider || '',
+        ai_model: row.ai_model || '',
+        ai_api_url: row.ai_api_url || '',
+        ai_api_key: row.ai_api_key || '',
+        user_prompt: row.user_prompt || ''
+      }
       this.activeTab = 'create'
-      this.form = { ...row }
     }
   }
 }
@@ -456,7 +505,7 @@ export default {
   border-radius: 14px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.08);
   background-color: #fff;
-  width: 100%;               /* 与卡片同宽 */
+  width: 100%;
   max-width: 100%;
   table-layout: fixed;
 }

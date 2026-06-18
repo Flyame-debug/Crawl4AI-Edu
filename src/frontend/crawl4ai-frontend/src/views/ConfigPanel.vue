@@ -96,20 +96,28 @@
 
     <!-- 操作按钮区 -->
     <div class="actions">
-      <el-button type="primary" @click="previewCollect">开始预览采集</el-button>
+      <el-button type="primary" @click="previewCollect" :loading="submitting">
+        {{ submitting ? '提交中...' : '开始预览采集' }}
+      </el-button>
     </div>
 
     <!-- 预览弹窗 -->
     <el-dialog v-model="previewVisible" title="采集预览" width="60%">
-      <div class="preview-content">
+      <div class="preview-content" v-loading="previewLoading">
         <div class="markdown-preview">
-          <p>### 假数据示例</p>
-          <p>这里展示采集到的 Markdown/HTML 内容片段。</p>
+          <p v-if="previewData.length === 0 && !previewLoading">暂无预览数据</p>
+          <p v-for="(item, idx) in previewData" :key="idx">### {{ item.title }}</p>
         </div>
         <el-table :data="previewData" style="margin-top: 20px;">
           <el-table-column prop="title" label="标题" />
           <el-table-column prop="url" label="网址" />
-          <el-table-column prop="status" label="状态" />
+          <el-table-column prop="status" label="状态">
+            <template #default="scope">
+              <el-tag :type="scope.row.status === '成功' ? 'success' : 'danger'">
+                {{ scope.row.status }}
+              </el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
       <template #footer>
@@ -122,10 +130,17 @@
 
 <script>
 import { CopyDocument } from '@element-plus/icons-vue'
+import { startTask } from '@/api/tasks'
 
 export default {
   name: 'ConfigPanel',
   components: { CopyDocument },
+  props: {
+    template: {
+      type: Object,
+      default: () => ({})
+    }
+  },
   data() {
     return {
       config: {
@@ -155,10 +170,9 @@ def fetch_data(url):
         return None`,
       advancedOpen: false,
       previewVisible: false,
-      previewData: [
-        { title: '课程公告示例', url: 'http://example.com/course', status: '成功' },
-        { title: '新闻示例', url: 'http://example.com/news', status: '失败' }
-      ],
+      previewLoading: false,
+      previewData: [],
+      submitting: false,
       rules: {
         targetUrls: [{ required: true, message: '请输入目标网址', trigger: 'blur' }],
         renderPage: [{ required: true, message: '请选择页面渲染方式', trigger: 'change' }],
@@ -166,7 +180,34 @@ def fetch_data(url):
       }
     }
   },
+  watch: {
+    template: {
+      handler(newVal) {
+        if (newVal && newVal.id) {
+          this.fillFormFromTemplate(newVal)
+        }
+      },
+      immediate: true,
+      deep: true
+    }
+  },
   methods: {
+    fillFormFromTemplate(tpl) {
+      if (tpl.seed_url) this.config.targetUrls = tpl.seed_url
+      if (tpl.need_render !== undefined) this.config.renderPage = tpl.need_render
+      if (tpl.wait_load !== undefined) this.config.waitTime = tpl.wait_load
+      if (tpl.enable_cache !== undefined) this.config.cacheEnabled = tpl.enable_cache
+      if (tpl.timeout) {
+        this.config.timeoutEnabled = true
+        this.config.timeout = tpl.timeout
+      }
+      if (tpl.ai_enabled !== undefined) this.aiConfig.enabled = tpl.ai_enabled
+      if (tpl.ai_provider) this.aiConfig.provider = tpl.ai_provider
+      if (tpl.ai_model) this.aiConfig.model = tpl.ai_model
+      if (tpl.ai_api_url) this.aiConfig.endpoint = tpl.ai_api_url
+      if (tpl.ai_api_key) this.aiConfig.apiKey = tpl.ai_api_key
+      if (tpl.user_prompt) this.aiConfig.prompts = [tpl.user_prompt]
+    },
     toggleAdvanced() {
       this.advancedOpen = !this.advancedOpen
     },
@@ -180,14 +221,56 @@ def fetch_data(url):
     removePrompt(index) {
       this.aiConfig.prompts.splice(index, 1)
     },
-    previewCollect() {
-      this.$refs.configForm.validate(valid => {
-        if (valid) {
-          this.previewVisible = true
-        } else {
-          this.$message.error('请填写所有必填项')
+    async previewCollect() {
+      const valid = await this.$refs.configForm.validate().catch(() => false)
+      if (!valid) {
+        this.$message.error('请填写所有必填项')
+        return
+      }
+      this.submitting = true
+      try {
+        // 严格对齐接口文档：POST /api/tasks/start/ 只需6个字段
+        const payload = {
+          template_id: this.template.id || null,
+          task_type: 'preview',
+          user_prompt: this.aiConfig.prompts.join('\n'),
+          ai_model: this.aiConfig.model,
+          ai_api_url: this.aiConfig.endpoint,
+          ai_api_key: this.aiConfig.apiKey
         }
-      })
+        const res = await startTask(payload)
+        if (res.data.code === 200) {
+          this.$message.success('预览采集任务已启动')
+          this.previewVisible = true
+          this.fetchPreviewData()
+        } else {
+          this.$message.error(res.data.msg || '启动失败')
+        }
+      } catch (error) {
+        console.error('启动预览采集失败：', error)
+        this.$message.error('启动失败，请稍后重试')
+        this.previewVisible = true
+        this.previewData = [
+          { title: '示例数据', url: 'http://example.com', status: '成功' }
+        ]
+      } finally {
+        this.submitting = false
+      }
+    },
+    async fetchPreviewData() {
+      this.previewLoading = true
+      try {
+        // 此处可调用 getTaskPreview 接口，目前暂用假数据
+        this.previewData = [
+          { title: '课程公告示例', url: 'http://example.com/course', status: '成功' },
+          { title: '新闻示例', url: 'http://example.com/news', status: '失败' }
+        ]
+      } catch (error) {
+        console.error('获取预览数据失败：', error)
+        this.previewData = []
+      } finally {
+        this.previewLoading = false
+      }
     },
     resetConfig() {
       this.previewVisible = false
@@ -196,20 +279,17 @@ def fetch_data(url):
     continueCollect() {
       this.previewVisible = false
       this.$message.success('继续进行整体爬取工作')
-      // 跳转到任务监控界面
       this.$router.push('/tasks')
     }
   }
 }
 </script>
 
-
 <style scoped>
 .config-panel {
   padding: 20px;
 }
 
-/* 标题区域：纯文字，不加背景色或边框 */
 .section-title {
   font-size: 15px;
   font-weight: 600;
@@ -220,7 +300,6 @@ def fetch_data(url):
   margin-bottom: 10px;
 }
 
-/* 内容卡片 */
 .config-card {
   padding: 20px;
   border: 1px solid #eee;
@@ -228,19 +307,16 @@ def fetch_data(url):
   margin-bottom: 20px;
 }
 
-/* 表单区 */
 .form-block {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-/* 开关按钮单独一行 */
 .switch-row {
   margin-bottom: 0;
 }
 
-/* 提示文字：小字，换行显示在按钮下面 */
 .hint {
   font-size: 12px;
   color: #888;
@@ -248,7 +324,6 @@ def fetch_data(url):
   display: block;
 }
 
-/* 提取指令输入行 */
 .prompt-row {
   display: flex;
   align-items: center;
@@ -256,27 +331,23 @@ def fetch_data(url):
   margin-bottom: 8px;
 }
 
-/* 超时时间：开关和输入框分隔 */
 .timeout-row {
   display: flex;
   align-items: center;
-  gap: 12px; /* 开关和输入框隔开一点 */
+  gap: 12px;
 }
 
-/* 操作按钮区 */
 .actions {
   margin-top: 20px;
   text-align: center;
 }
 
-/* 预览弹窗中的 Markdown 区域 */
 .markdown-preview {
   background: #f5f5f5;
   padding: 10px;
   margin-bottom: 10px;
 }
 
-/* 高级代码编辑器整体容器 */
 .editor-box {
   margin-top: 15px;
   border: 1px solid #444;
@@ -284,7 +355,6 @@ def fetch_data(url):
   overflow: hidden;
 }
 
-/* 编辑器顶部工具栏 */
 .editor-header {
   background: #2d2d2d;
   color: #ccc;
@@ -303,7 +373,6 @@ def fetch_data(url):
   padding: 0;
 }
 
-/* 可编辑代码区（el-input textarea） */
 .code-editor ::v-deep(.el-textarea__inner) {
   width: 100%;
   height: 300px;
@@ -319,7 +388,6 @@ def fetch_data(url):
   box-shadow: none;
 }
 
-/* AI配置下拉框黑色风格 */
 .dark-select ::v-deep(.el-input__inner) {
   background-color: #1e1e1e !important;
   color: #fff !important;
@@ -337,4 +405,3 @@ def fetch_data(url):
   color: #fff !important;
 }
 </style>
-

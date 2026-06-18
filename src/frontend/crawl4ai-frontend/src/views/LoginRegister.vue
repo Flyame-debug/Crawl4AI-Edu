@@ -105,19 +105,19 @@ export default {
             spinner: 'el-icon-loading',
             background: 'rgba(0, 0, 0, 0.7)'
           })
-          
           try {
             const res = await login(this.loginForm)
-            if (res.data.success) {
-              localStorage.setItem('token', res.data.token)
-              localStorage.setItem('username', res.data.user.username)
-              localStorage.setItem('email', res.data.user.email)
-              localStorage.setItem('userId', res.data.user.id)
-              
+            // 修正：文档统一格式 code === 200
+            if (res.data.code === 200) {
+              const { token, user } = res.data.data
+              localStorage.setItem('token', token)
+              localStorage.setItem('username', user.username)
+              localStorage.setItem('email', user.email || '')
+              localStorage.setItem('userId', user.id)
               this.$message.success('登录成功')
               this.$router.push('/home')
             } else {
-              this.$message.error(res.data.error || '登录失败')
+              this.$message.error(res.data.msg || '登录失败')
             }
           } catch (error) {
             console.error('登录错误:', error)
@@ -138,20 +138,20 @@ export default {
             spinner: 'el-icon-loading',
             background: 'rgba(0, 0, 0, 0.7)'
           })
-          
           try {
             const res = await register(this.registerForm)
-            if (res.data.success) {
-              this.$message.success(res.data.message || '注册成功，请登录')
+            // 修正：code === 200
+            if (res.data.code === 200) {
+              this.$message.success(res.data.msg || '注册成功，请登录')
               this.registerForm = { username: '', password: '', email: '', email_code: '' }
               this.activeTab = 'login'
             } else {
-              this.$message.error(res.data.error || res.data.message || '注册失败')
+              this.$message.error(res.data.msg || '注册失败')
             }
           } catch (error) {
             console.error('注册错误:', error)
-            const errorMsg = error.response?.data?.error || error.response?.data?.message || '注册失败，请稍后重试'
-            this.$message.error(errorMsg)
+            const msg = error.response?.data?.msg || error.response?.data?.error || '注册失败，请稍后重试'
+            this.$message.error(msg)
           } finally {
             loading.close()
           }
@@ -164,27 +164,25 @@ export default {
         this.$message.error('请先输入邮箱')
         return
       }
-      
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
       if (!emailRegex.test(this.registerForm.email)) {
         this.$message.error('邮箱格式不正确')
         return
       }
-      
       const loading = this.$loading({
         lock: true,
         text: '发送中...',
         spinner: 'el-icon-loading',
         background: 'rgba(0, 0, 0, 0.7)'
       })
-      
       try {
         const res = await sendEmailCode({ email: this.registerForm.email })
-        if (res.data.success) {
-          this.$message.success(res.data.message || '验证码已发送')
+        // 修正：code === 200
+        if (res.data.code === 200) {
+          this.$message.success(res.data.msg || '验证码已发送')
           this.registerForm.email_code = '123456'
         } else {
-          this.$message.error(res.data.message || '发送失败')
+          this.$message.error(res.data.msg || '发送失败')
         }
       } catch (error) {
         console.error('发送验证码错误:', error)

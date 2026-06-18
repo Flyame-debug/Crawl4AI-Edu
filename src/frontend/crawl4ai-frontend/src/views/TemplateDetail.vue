@@ -1,8 +1,8 @@
 <template>
-  <div class="template-detail">
+  <div class="template-detail" v-loading="loading">
     <!-- 顶部简介卡片 -->
     <el-card class="intro-card" shadow="hover">
-      <h2>{{ template.name }}</h2>
+      <h2>{{ template.name || '模板详情' }}</h2>
       <p>{{ template.description }}</p>
       <el-tag>{{ template.category || '未分类' }}</el-tag>
     </el-card>
@@ -69,6 +69,7 @@ import OverviewPanel from './OverviewPanel.vue'
 import TaskListPanel from './TaskListPanel.vue'
 import StatsPanel from './StatsPanel.vue'
 import { CopyDocument, ArrowLeft, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
+import { getTemplateDetail } from '@/api/templates'
 
 export default {
   name: 'TemplateDetail',
@@ -80,15 +81,45 @@ export default {
       codeTab: 'XPath',
       showMenu: false,
       template: {
-        name: '教育数据采集',
-        description: '采集高校官网的课程与公告信息',
-        category: '教育'
+        name: '',
+        description: '',
+        category: ''
       },
+      loading: false,
       xpathExample: `//div[@class="course-list"]/div/h3`,
       cssExample: `.course-list > div > h3`
     }
   },
   methods: {
+    // 获取模板详情
+    async fetchDetail() {
+      const id = this.$route.params.id
+      if (!id) {
+        this.$message.warning('缺少模板ID')
+        return
+      }
+      this.loading = true
+      try {
+        const res = await getTemplateDetail(id)
+        if (res.data.code === 200) {
+          this.template = res.data.data || {}
+        } else {
+          this.$message.error(res.data.msg || '获取模板详情失败')
+        }
+      } catch (error) {
+        console.error('获取模板详情失败：', error)
+        this.$message.error('获取模板详情失败，请稍后重试')
+        // 兜底假数据
+        this.template = {
+          id: id,
+          name: '示例模板',
+          description: '这是一个示例模板，真实数据加载失败',
+          category: '教育'
+        }
+      } finally {
+        this.loading = false
+      }
+    },
     toggleCode() {
       this.codeExpanded = !this.codeExpanded
       this.showMenu = false
@@ -103,6 +134,9 @@ export default {
       this.codeTab = tab
       this.showMenu = false
     }
+  },
+  mounted() {
+    this.fetchDetail()
   }
 }
 </script>
@@ -114,10 +148,9 @@ export default {
 
 /* 顶部简介卡片统一宽度 + 大圆角 */
 .intro-card {
-  border-radius: 20px; /* 圆角更大 */
+  border-radius: 20px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   margin-bottom: 20px;
-  
   margin-left: auto;
   margin-right: auto;
   width: 100%;
@@ -135,7 +168,7 @@ export default {
   display: flex;
   justify-content: center;
   transition: flex 0.3s ease;
-  border-radius: 20px; /* 主体卡片圆角更大 */
+  border-radius: 20px;
 }
 .main-card.shrink {
   flex: 0.7;
@@ -144,20 +177,20 @@ export default {
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
-  border-radius: 20px; /* 内部卡片也保持一致圆角 */
+  border-radius: 20px;
 }
 
 /* Tab 栏选中高亮蓝线 */
 ::v-deep(.el-tabs__item.is-active) {
-  color: #409EFF !important; /* 蓝色高亮 */
-  font-weight: 600;          /* 加粗 */
-  border-bottom: 3px solid #409EFF !important; /* 粗蓝线 */
+  color: #409EFF !important;
+  font-weight: 600;
+  border-bottom: 3px solid #409EFF !important;
 }
 ::v-deep(.el-tabs__item) {
   transition: all 0.3s ease;
 }
 ::v-deep(.el-tabs__nav-wrap::after) {
-  display: none; /* 去掉默认灰色下划线 */
+  display: none;
 }
 
 /* 右侧代码示例保持原样 */

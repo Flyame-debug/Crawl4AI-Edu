@@ -1,5 +1,5 @@
 <template>
-  <div class="template-manager">
+  <div class="template-manager" v-loading="loading">
     <!-- 搜索区卡片 -->
     <el-card shadow="hover" class="search-card">
       <div class="wave"></div>
@@ -15,6 +15,7 @@
         placeholder="请输入模板名称或关键词"
         clearable
         class="search-bar"
+        @keyup.enter="doSearch"
       >
         <template #prefix>
           <el-icon><SearchIcon /></el-icon>
@@ -43,9 +44,9 @@
     </div>
 
     <!-- 模板列表区 -->
-    <div class="template-list">
+    <div class="template-list" v-if="!loading">
       <el-row :gutter="30" style="flex-wrap: wrap;">
-        <el-col :span="8" v-for="template in filteredTemplates" :key="template.id">
+        <el-col :span="8" v-for="template in templates" :key="template.id">
           <el-card shadow="hover" class="template-card" @dblclick="openDetail(template)">
             <h3>{{ template.name }}</h3>
             <p>{{ template.description }}</p>
@@ -54,12 +55,15 @@
           </el-card>
         </el-col>
       </el-row>
+      <!-- 无数据提示 -->
+      <el-empty v-if="!templates.length" description="暂无模板" />
     </div>
   </div>
 </template>
 
 <script>
 import { Search as SearchIcon } from '@element-plus/icons-vue'
+import { getTemplates } from '@/api/templates'
 
 export default {
   name: 'TemplateManager',
@@ -68,36 +72,75 @@ export default {
     return {
       searchQuery: '',
       activeCategory: '全部',
-      categories: ['全部', '教育', '科研', '医疗'],
-      templates: [
-        { id: 1, name: '教育数据采集', description: '采集高校官网的课程与公告信息', category: '教育' },
-        { id: 2, name: '科研论文采集', description: '采集学术网站的论文摘要与引用', category: '科研' },
-        { id: 3, name: '医疗资讯采集', description: '采集医疗网站的最新资讯与政策', category: '医疗' },
-        { id: 4, name: '教育新闻采集', description: '采集教育类新闻门户的最新动态', category: '教育' },
-        { id: 5, name: '科研项目采集', description: '采集科研机构的项目与成果信息', category: '科研' },
-        { id: 6, name: '医疗政策采集', description: '采集医疗政策文件与公告', category: '医疗' }
-      ]
-    }
-  },
-  computed: {
-    filteredTemplates() {
-      let list = this.templates
-      if (this.activeCategory !== '全部') {
-        list = list.filter(t => t.category === this.activeCategory)
-      }
-      if (this.searchQuery) {
-        list = list.filter(t =>
-          t.name.includes(this.searchQuery) || t.description.includes(this.searchQuery)
-        )
-      }
-      return list
+      categories: ['全部', '教师信息', '课程信息', '新闻公告', '科研成果', '其他'],
+      templates: [],
+      loading: false
     }
   },
   methods: {
-    doSearch() {},
-    filterCategory(cat) { this.activeCategory = cat },
-    openDetail(template) { this.$router.push(`/templates/${template.id}`) },
-    goCreate() { this.$router.push('/templates/create') }
+    // 获取模板列表（真实接口）
+    async fetchTemplates() {
+      this.loading = true
+      try {
+        const params = {}
+        // 分类筛选：如果选择具体分类则传入 category 参数
+        if (this.activeCategory !== '全部') {
+          params.category = this.categoryMap(this.activeCategory)
+        }
+        // 搜索关键词（接口如果不支持 search，就前端过滤）
+        if (this.searchQuery) {
+          params.search = this.searchQuery  // 尝试传参，后端可忽略
+        }
+        const res = await getTemplates(params)
+        if (res.data.code === 200) {
+          this.templates = res.data.data.results || res.data.data || []
+          // 如果后端不支持 search 参数，前端再做关键词过滤
+          if (this.searchQuery) {
+            this.templates = this.templates.filter(t =>
+              t.name.includes(this.searchQuery) ||
+              (t.description && t.description.includes(this.searchQuery))
+            )
+          }
+        }
+      } catch (error) {
+        console.error('获取模板列表失败：', error)
+        this.$message.error('获取模板列表失败，请稍后重试')
+        this.templates = []
+      } finally {
+        this.loading = false
+      }
+    },
+    // 搜索
+    doSearch() {
+      this.fetchTemplates()
+    },
+    // 分类筛选
+    filterCategory(cat) {
+      this.activeCategory = cat
+      this.fetchTemplates()
+    },
+    // 分类中文到英文映射
+    categoryMap(cn) {
+      const map = {
+        '教师信息': 'teacher',
+        '课程信息': 'course',
+        '新闻公告': 'news',
+        '科研成果': 'research',
+        '其他': 'other'
+      }
+      return map[cn] || ''
+    },
+    // 跳转模板详情
+    openDetail(template) {
+      this.$router.push(`/templates/${template.id}`)
+    },
+    // 跳转新建模板
+    goCreate() {
+      this.$router.push('/templates/create')
+    }
+  },
+  mounted() {
+    this.fetchTemplates()
   }
 }
 </script>
@@ -107,7 +150,7 @@ export default {
   padding: 40px 80px;
 }
 
-/* 搜索区卡片：底部浅蓝打底，上面深蓝波浪 */
+/* 搜索区卡片 */
 .search-card {
   margin-bottom: 40px;
   text-align: center;
@@ -119,7 +162,7 @@ export default {
   background: #bbdefb;
 }
 
-/* 波浪背景：旋转角度差更大 */
+/* 波浪背景 */
 .search-card .wave {
   position: absolute;
   top: 50%;
@@ -158,7 +201,6 @@ export default {
   100% { transform: translate(-50%, -50%) rotate(600deg); }
 }
 
-/* 卡片内容置顶 */
 .search-title,
 .search-desc,
 .search-bar,
@@ -272,7 +314,7 @@ export default {
   line-height: 1.5;
 }
 
-/* 悬停提示文字：卡片内部额外一行 */
+/* 悬停提示文字 */
 .template-card .hover-tip {
   margin-top: 12px;
   font-size: 13px;

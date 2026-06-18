@@ -3,30 +3,30 @@
     <!-- 概述信息标题区 -->
     <div class="section-title">概述信息</div>
 
-    <!-- 工具信息表格 -->
+    <!-- 工具信息表格（动态数据） -->
     <el-table :data="toolInfo" border stripe size="default" class="styled-table">
       <el-table-column prop="name" label="字段" />
       <el-table-column prop="value" label="值" />
     </el-table>
 
-    <!-- 分类标签 -->
+    <!-- 分类标签（动态数据） -->
     <div class="tags">
-      <el-tag v-for="tag in info.tags" :key="tag" type="success">{{ tag }}</el-tag>
+      <el-tag v-for="tag in tags" :key="tag" type="success">{{ tag }}</el-tag>
     </div>
 
-    <!-- 请求参数表格 -->
+    <!-- 请求参数表格（暂留占位，文档无单独接口） -->
     <el-table :data="params" border stripe size="default" class="styled-table">
       <el-table-column prop="name" label="参数名" />
       <el-table-column prop="desc" label="说明" />
     </el-table>
 
-    <!-- 返回字段表格 -->
+    <!-- 返回字段表格（暂留占位） -->
     <el-table :data="fields" border stripe size="default" class="styled-table">
       <el-table-column prop="name" label="字段名" />
       <el-table-column prop="desc" label="说明" />
     </el-table>
 
-    <!-- 示例响应截图 -->
+    <!-- 示例响应截图（暂留占位） -->
     <div class="example-box">
       <div class="example">
         <img src="https://via.placeholder.com/400x200?text=示例截图" alt="示例响应截图" />
@@ -39,18 +39,15 @@
 <script>
 export default {
   name: 'OverviewPanel',
-  props: { template: Object },
+  props: {
+    template: {
+      type: Object,
+      default: () => ({})
+    }
+  },
   data() {
     return {
-      toolInfo: [
-        { name: '采集器名称', value: '教育数据采集' },
-        { name: '使用的AI', value: 'deepseek-chat' },
-        { name: '使用次数', value: '12' },
-        { name: '更新时间', value: '2026-06-15' }
-      ],
-      info: {
-        tags: ['教育', '电商', '科研']
-      },
+      // 占位数据：请求参数和返回字段暂无接口，暂时保留
       params: [
         { name: 'keyword', desc: '搜索关键词' },
         { name: 'pageSize', desc: '每页返回数量' },
@@ -62,6 +59,52 @@ export default {
         { name: 'source', desc: '来源网站' }
       ]
     }
+  },
+  computed: {
+    // 动态工具信息：从模板数据生成
+    toolInfo() {
+      const tpl = this.template || {}
+      return [
+        { name: '采集器名称', value: tpl.name || '未知' },
+        { name: '使用的AI', value: tpl.ai_model || '未使用' },
+        { name: '使用次数', value: tpl.usage_count ?? '0' },
+        { name: '更新时间', value: this.formatTime(tpl.updated_at) || '未知' }
+      ]
+    },
+    // 动态分类标签
+    tags() {
+      const tpl = this.template || {}
+      const list = []
+      if (tpl.category) list.push(this.categoryLabel(tpl.category))
+      if (tpl.tags && Array.isArray(tpl.tags)) {
+        list.push(...tpl.tags)
+      }
+      return list.length ? list : ['暂无分类']
+    }
+  },
+  methods: {
+    // 时间格式化
+    formatTime(dateStr) {
+      if (!dateStr) return ''
+      const date = new Date(dateStr)
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const hours = String(date.getHours()).padStart(2, '0')
+      const minutes = String(date.getMinutes()).padStart(2, '0')
+      return `${year}-${month}-${day} ${hours}:${minutes}`
+    },
+    // 分类中文映射
+    categoryLabel(category) {
+      const map = {
+        teacher: '教师信息',
+        course: '课程信息',
+        news: '新闻公告',
+        research: '科研成果',
+        other: '其他'
+      }
+      return map[category] || category
+    }
   }
 }
 </script>
@@ -71,10 +114,9 @@ export default {
   padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 32px; /* 每个表格/板块之间间距更大，匀称 */
+  gap: 32px;
 }
 
-/* 标题区：和 TaskListPanel 对齐 */
 .section-title {
   font-size: 16px;
   font-weight: 600;
@@ -85,11 +127,10 @@ export default {
   margin-bottom: 0;
 }
 
-/* 表格美化：和 TaskListPanel 保持一致 */
 .styled-table {
   border-radius: 8px;
   overflow: hidden;
-  font-size: 14px; /* 字体稍大 */
+  font-size: 14px;
 }
 .styled-table ::v-deep(.el-table__header-wrapper) {
   background-color: #f9f9f9;
@@ -98,14 +139,12 @@ export default {
   background-color: #f0f9ff !important;
 }
 
-/* 标签区 */
 .tags {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-/* 示例响应加框 */
 .example-box {
   border: 1px solid #ddd;
   border-radius: 8px;

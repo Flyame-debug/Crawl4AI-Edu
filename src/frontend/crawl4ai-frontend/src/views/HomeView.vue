@@ -62,7 +62,8 @@ export default {
         { title: '新建模板', icon: Plus, desc: '创建新的采集任务模板', route: '/templates/create' },
         { title: '任务列表', icon: List, desc: '查看和管理采集任务', route: '/tasks' }
       ],
-      animatedNumbers: {}
+      animatedNumbers: {},
+      animationFrames: [] // 存储所有动画帧ID，用于销毁时取消
     }
   },
   mounted() {
@@ -75,6 +76,10 @@ export default {
         this.animateNumber(card.title, card.number)
       }
     })
+  },
+  beforeUnmount() {
+    // 取消所有未完成的动画帧，防止内存泄漏
+    this.animationFrames.forEach(id => cancelAnimationFrame(id))
   },
   methods: {
     goLogin() {
@@ -98,14 +103,15 @@ export default {
     },
     animateNumber(key, target) {
       let current = 0
-      const step = target / 300 // 动画时长约 5 秒
+      const step = target / 300
       const update = () => {
         current += step
         if (current >= target) {
           this.animatedNumbers[key] = target
         } else {
           this.animatedNumbers[key] = Math.floor(current)
-          requestAnimationFrame(update)
+          const frameId = requestAnimationFrame(update)
+          this.animationFrames.push(frameId)
         }
       }
       update()
@@ -119,7 +125,6 @@ export default {
   padding: 50px;
 }
 
-/* 欢迎语区块 */
 .welcome-section {
   margin-bottom: 60px;
   text-align: center;
@@ -135,7 +140,6 @@ export default {
   margin-top: 10px;
 }
 
-/* 功能展示区块 */
 .feature-section {
   margin: 70px 0;
 }
@@ -168,7 +172,7 @@ export default {
   margin: 18px 0;
   font-size: 22px;
   color: #333;
-  min-height: 28px; /* 保证标题高度一致 */
+  min-height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -184,7 +188,6 @@ export default {
   color: #666;
 }
 
-/* 系统入口区块 */
 .entry-section {
   margin: 70px 0;
 }
@@ -227,7 +230,6 @@ export default {
   color: #666;
 }
 
-/* 底部快速开始 */
 .quick-start {
   text-align: right;
   font-size: 15px;
