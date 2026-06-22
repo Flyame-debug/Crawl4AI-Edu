@@ -71,7 +71,7 @@ urlpatterns = [
     path('templates/<int:pk>/save_rule/', views.template_save_rule, name='template_save_rule'),
     # ========== P1新增：历史模板 ==========
     path('templates/history/', views.template_history, name='template_history'),
-    
+    path('templates/<int:pk>/stats/', views.template_stats, name='template_stats'),
     # ---------- 任务控制 ----------
     path('tasks/start/', views.start_task, name='start_task'),
     path('tasks/<str:task_id>/pause/', views.pause_task, name='pause_task'),

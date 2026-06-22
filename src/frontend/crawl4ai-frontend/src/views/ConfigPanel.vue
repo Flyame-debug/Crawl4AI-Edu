@@ -403,6 +403,14 @@ generateRule() {
     },
     
     async previewCollect() {
+    // ✅ 第一步：打印 template 信息
+  console.log('🔍 ===== ConfigPanel 调试信息 =====')
+  console.log('🔍 this.template:', this.template)
+  console.log('🔍 this.template 类型:', typeof this.template)
+  console.log('🔍 this.template.id:', this.template?.id)
+  console.log('🔍 this.template 所有键:', Object.keys(this.template || {}))
+  console.log('🔍 ================================')
+  
   try {
     const valid = await this.$refs.configForm.validate()
     if (!valid) {
@@ -416,6 +424,10 @@ generateRule() {
   
   this.submitting = true
   try {
+     const templateId = this.template?.id || this.$route?.params?.id
+    
+    console.log('🔍 使用的模板ID:', templateId)
+    
     const payload = {
       template_id: this.template.id || null,
       task_type: 'preview',
@@ -426,11 +438,11 @@ generateRule() {
       generated_rule: this.advancedCode
     }
     
-    console.log('📤 启动任务请求:', payload)
+    console.log('📤 启动任务请求 Payload:', JSON.stringify(payload, null, 2))
     
     const res = await startTask(payload)
     console.log('📥 启动任务响应:', res)
-    
+
     if (res.data && res.data.code === 200) {
       this.$message.success('预览采集任务已启动')
       this.previewVisible = true

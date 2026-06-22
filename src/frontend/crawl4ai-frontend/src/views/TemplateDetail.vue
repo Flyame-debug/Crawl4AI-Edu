@@ -134,6 +134,8 @@ export default {
           if (res.data.code === 200) {
             // ✅ 成功获取数据
             const data = res.data.data || {}
+            console.log('📋 模板数据:', data)
+            console.log('📋 模板ID:', data.id)
             this.template = {
               id: data.id || id,
               name: data.name || '未命名模板',
