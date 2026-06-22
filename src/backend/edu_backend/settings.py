@@ -247,4 +247,9 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.api.tasks.process_conversion_task',
         'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
     },
+    'monitor-ollama-health': {
+        'task': 'apps.api.tasks.monitor_ollama_health',
+        'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
+        'options': {'queue': 'default'},
+    },
 }

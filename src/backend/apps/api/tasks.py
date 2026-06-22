@@ -4,9 +4,10 @@
 主要功能:
     1. process_conversion_task: 定时批量处理 HTML→Markdown 转换
     2. process_ai_cleaning_task: V2.0新增 - 批量AI清洗任务（成员B）
-    3. clean_preview_tasks: V2.0新增 - 清理过期预览数据
-    4. sync_running_tasks_status: V2.0新增 - 同步运行中任务状态
-    5. generate_rules_task: V2.0新增 - 异步生成采集规则（成员A）
+    3. monitor_ollama_health: V2.0新增 - Ollama 服务健康监控（成员B）
+    4. clean_preview_tasks: V2.0新增 - 清理过期预览数据
+    5. sync_running_tasks_status: V2.0新增 - 同步运行中任务状态
+    6. generate_rules_task: V2.0新增 - 异步生成采集规则（成员A）
 """
 
 import logging
@@ -242,6 +243,54 @@ def generate_rules_task(self, user_prompt: str, html_skeleton: str,
         logger.error(f'generate_rules_task 执行异常: {exc}')
         countdown = 30 * (2 ** self.request.retries)
         raise self.retry(exc=exc, countdown=countdown)
+
+
+@shared_task(bind=True, max_retries=1)
+def monitor_ollama_health(self):
+    """
+    V2.0新增：Ollama 服务健康监控（成员B）
+    
+    功能：
+        1. 检测 Ollama API 可达性
+        2. 检测模型是否就绪
+        3. 健康时静默（debug日志），异常时记录 error 日志
+    
+    建议调度：每5分钟执行一次
+    
+    返回:
+        {'healthy': bool, 'api_url': str, 'model': str, ...}
+    """
+    try:
+        from apps.api.services.ai_service import get_ollama_service
+
+        ollama = get_ollama_service()
+        result = ollama.check_health()
+
+        if result['healthy']:
+            logger.debug(
+                f'Ollama 健康检查通过: {ollama.api_url}, '
+                f'模型: {ollama.model}'
+            )
+            return {
+                'healthy': True,
+                'api_url': ollama.api_url,
+                'model': ollama.model,
+            }
+        else:
+            logger.error(
+                f'Ollama 健康检查异常: '
+                f'api_reachable={result["api_reachable"]}, '
+                f'model_ready={result["model_ready"]}, '
+                f'error={result.get("error")}'
+            )
+            return {
+                'healthy': False,
+                'detail': result.get('error', '未知异常'),
+            }
+
+    except Exception as e:
+        logger.error(f'Ollama 健康监控任务执行异常: {str(e)}')
+        return {'healthy': False, 'error': str(e)}
 
 
 @shared_task
