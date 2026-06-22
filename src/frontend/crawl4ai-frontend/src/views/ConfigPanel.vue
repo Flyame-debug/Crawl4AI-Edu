@@ -415,47 +415,74 @@ def fetch_data(url):
     },
 
     async fetchPreviewData(taskId) {
-      this.previewLoading = true
-      try {
-        const res = await getTaskPreview(taskId, 10)
-        console.log('📥 预览数据响应:', res)
+  this.previewLoading = true
+  try {
+    const res = await getTaskPreview(taskId, 10)
+    console.log('📥 预览数据响应:', res)
 
-        if (res.data && res.data.code === 200) {
-          const extracted = res.data.data?.extracted_data || ''
-          if (extracted && typeof extracted === 'string') {
-            this.previewHtml = marked(extracted)
-          } else {
-            const previewList = res.data.data?.preview || []
-            if (previewList.length > 0) {
-              let html = '### 📊 采集预览\n\n'
-              previewList.forEach((item, idx) => {
-                html += `#### 记录 ${idx + 1}\n\n`
-                html += `- **URL**: ${item.url || '未知'}\n`
-                html += `- **分类**: ${item.category || '未知'}\n`
-                if (item.extracted_data) {
-                  if (typeof item.extracted_data === 'string') {
-                    html += `- **数据**:\n${item.extracted_data}\n`
-                  } else {
-                    html += `- **数据**: \`${JSON.stringify(item.extracted_data)}\`\n`
-                  }
+    if (res.data && res.data.code === 200) {
+      // 提取数据列表
+      const previewList = res.data.data?.preview || []
+      
+      if (previewList.length > 0) {
+        let html = '### 📊 采集预览\n\n'
+        
+        previewList.forEach((item, idx) => {
+          html += `#### 记录 ${idx + 1}\n\n`
+          html += `- **URL**: ${item.url || '未知'}\n`
+          html += `- **分类**: ${item.category || '未知'}\n`
+          
+          // ✅ 适配 B 模块返回的对象格式
+          const extractedData = item.extracted_data || {}
+          
+          if (Object.keys(extractedData).length > 0) {
+            // 检查是否是 B 模块格式（包含 content）
+            if (extractedData.content) {
+              // 显示数据来源和置信度
+              if (extractedData.method) {
+                const methodLabels = {
+                  'ai_ollama': '🤖 AI提取',
+                  'ai_ollama_fixed': '🤖 AI提取+规则修正',
+                  'rule_fallback': '📋 规则兜底',
+                  'extraction_error': '⚠️ 提取失败'
                 }
-                html += '\n---\n\n'
-              })
-              this.previewHtml = marked(html)
+                html += `- **数据来源**: ${methodLabels[extractedData.method] || extractedData.method}\n`
+              }
+              if (extractedData.confidence) {
+                const confidenceLabels = {
+                  'high': '🟢 高',
+                  'medium': '🟡 中',
+                  'low': '🔴 低'
+                }
+                html += `- **置信度**: ${confidenceLabels[extractedData.confidence] || extractedData.confidence}\n`
+              }
+              // 渲染 content
+              html += `\n${extractedData.content}\n`
             } else {
-              this.previewHtml = '<p>暂无预览数据</p>'
+              // 不是 B 模块格式，显示 JSON
+              html += `- **数据**: \`${JSON.stringify(extractedData)}\`\n`
             }
+          } else {
+            // 没有数据
+            html += `- **数据**: 无\n`
           }
-        } else {
-          this.previewHtml = '<p>获取预览失败</p>'
-        }
-      } catch (error) {
-        console.error('❌ 获取预览数据失败:', error)
-        this.previewHtml = '<p>获取预览失败</p>'
-      } finally {
-        this.previewLoading = false
+          html += '\n---\n\n'
+        })
+        
+        this.previewHtml = marked(html)
+      } else {
+        this.previewHtml = '<p>暂无预览数据</p>'
       }
-    },
+    } else {
+      this.previewHtml = '<p>获取预览失败</p>'
+    }
+  } catch (error) {
+    console.error('❌ 获取预览数据失败:', error)
+    this.previewHtml = '<p>获取预览失败</p>'
+  } finally {
+    this.previewLoading = false
+  }
+},
 
     resetConfig() {
       this.previewVisible = false

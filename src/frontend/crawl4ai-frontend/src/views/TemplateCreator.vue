@@ -163,7 +163,7 @@
 </template>
 
 <script>
-import { getTemplateHistory, createTemplate, updateTemplate, deleteTemplate } from '@/api/templates'
+import { getTemplates, createTemplate, updateTemplate, deleteTemplate } from '@/api/templates'
 
 export default {
   name: 'TemplateCreate',
@@ -174,8 +174,9 @@ export default {
       submissionLoading: false,
       detailVisible: false,
       detailRow: null,
-      editingId: null,       // 非 null 时表示编辑模式（驳回重编）
+      editingId: null,
       submitting: false,
+      currentUser: localStorage.getItem('username') || '',
       form: {
         name: '',
         seed_url: '',
@@ -229,81 +230,28 @@ export default {
     this.fetchSubmissions()
   },
   methods: {
-    // 获取我的提交（调用历史模板接口）
+    // 获取我的提交（只显示当前用户创建的模板）
     async fetchSubmissions() {
-      this.submissionLoading = true
-      try {
-        const res = await getTemplateHistory()
-        if (res.data.code === 200) {
-          this.submissions = res.data.data.results || res.data.data || []
-        }
-      } catch {
-        console.warn('获取我的提交失败，使用测试假数据')
-        this.loadMockSubmissions()
-      } finally {
-        this.submissionLoading = false
-      }
-    },
-    // 假数据兜底
-    loadMockSubmissions() {
-      this.submissions = [
-        {
-          id: 1,
-          name: '教师信息采集模板',
-          seed_url: 'https://example.com/teachers',
-          category: 'teacher',
-          need_render: true,
-          wait_load: 3,
-          enable_cache: false,
-          timeout: 30,
-          ai_enabled: true,
-          ai_provider: 'ollama',
-          ai_model: 'qwen2:7b',
-          ai_api_url: 'http://127.0.0.1:11434',
-          ai_api_key: '',
-          user_prompt: '提取教师姓名、职称、邮箱',
-          status: 'pending',
-          created_at: '2026-06-16T14:30:00'
-        },
-        {
-          id: 2,
-          name: '课程信息采集模板',
-          seed_url: 'https://example.com/courses',
-          category: 'course',
-          need_render: false,
-          wait_load: 0,
-          enable_cache: true,
-          timeout: 20,
-          ai_enabled: false,
-          ai_provider: '',
-          ai_model: '',
-          ai_api_url: '',
-          ai_api_key: '',
-          user_prompt: '',
-          status: 'approved',
-          created_at: '2026-06-15T09:15:00'
-        },
-        {
-          id: 3,
-          name: '新闻公告采集模板',
-          seed_url: 'https://example.com/news',
-          category: 'news',
-          need_render: true,
-          wait_load: 5,
-          enable_cache: false,
-          timeout: 45,
-          ai_enabled: true,
-          ai_provider: 'deepseek',
-          ai_model: 'deepseek-chat',
-          ai_api_url: 'https://api.deepseek.com/v1',
-          ai_api_key: 'sk-xxxx',
-          user_prompt: '提取新闻标题、发布时间、正文摘要',
-          status: 'rejected',
-          created_at: '2026-06-14T17:45:00',
-          review_comment: '目标网站需要登录后才能访问，请提供可公开访问的地址'
-        }
-      ]
-    },
+  this.submissionLoading = true
+  try {
+    const res = await getTemplates({ page: 1, page_size: 100 })
+    if (res.data.code === 200) {
+      const allTemplates = res.data.data.results || []
+      const username = localStorage.getItem('username') || 'test1'
+      // ✅ 只保留当前用户创建的
+      this.submissions = allTemplates.filter(
+        t => t.created_by_name === username
+      )
+      console.log(`📊 我的提交: ${this.submissions.length} 个`)
+    }
+  } catch (error) {
+    console.warn('获取我的提交失败:', error)
+    this.submissions = []  // ✅ 失败时显示空数组
+  } finally {
+    this.submissionLoading = false
+  }
+},
+
     formatTime(dateStr) {
       if (!dateStr) return ''
       const date = new Date(dateStr)
@@ -314,6 +262,7 @@ export default {
       const minutes = String(date.getMinutes()).padStart(2, '0')
       return `${year}-${month}-${day} ${hours}:${minutes}`
     },
+
     categoryLabel(category) {
       const map = {
         teacher: '教师信息',
@@ -324,8 +273,17 @@ export default {
       }
       return map[category] || category
     },
+
     // 提交模板（新建 / 驳回重编）
     async submitTemplate() {
+      console.log('🔍 submitTemplate 被调用')
+      console.log('🔍 editingId:', this.editingId)  // ✅ 添加
+      const token = localStorage.getItem('token')
+      if (!token) {
+        this.$message.warning('请先登录')
+        this.$router.push('/login')
+        return
+      }
       const valid = await this.$refs.configForm.validate().catch(() => false)
       if (!valid) {
         this.$message.error('请填写所有必填项')
@@ -336,10 +294,8 @@ export default {
         const payload = { ...this.form }
         let res
         if (this.editingId) {
-          // 驳回重编：调用更新接口
           res = await updateTemplate(this.editingId, payload)
         } else {
-          // 新建：调用创建接口
           res = await createTemplate(payload)
         }
         if (res.data.code === 200) {
@@ -357,6 +313,7 @@ export default {
         this.submitting = false
       }
     },
+
     resetForm() {
       this.$refs.configForm.resetFields()
       this.editingId = null
@@ -377,7 +334,8 @@ export default {
         user_prompt: ''
       }
     },
-    // 撤回申请（调用删除接口）
+
+    // 撤回申请
     async withdraw(id) {
       try {
         await this.$confirm('确认撤回该申请？', '提示', { type: 'warning' })
@@ -386,12 +344,12 @@ export default {
         this.fetchSubmissions()
       } catch (error) {
         if (error !== 'cancel') {
-          // 接口失败时仍从本地移除（测试模式兜底）
           this.$message.success('撤回成功（测试模式）')
           this.submissions = this.submissions.filter(s => s.id !== id)
         }
       }
     },
+
     // 删除申请
     async deleteSubmission(id) {
       try {
@@ -406,6 +364,7 @@ export default {
         }
       }
     },
+
     // 查看驳回原因
     viewReview(row) {
       if (row.review_comment) {
@@ -414,32 +373,37 @@ export default {
         this.$message.warning('暂无驳回信息')
       }
     },
-    // 查看配置详情弹窗
+
+    // 查看配置详情
     viewDetail(row) {
       this.detailRow = { ...row }
       this.detailVisible = true
     },
-    // 驳回重编：回填表单并切换到新建 Tab
+
+    // 驳回重编
     editTemplate(row) {
-      this.editingId = row.id
-      this.form = {
-        name: row.name || '',
-        seed_url: row.seed_url || '',
-        category: row.category || '',
-        description: row.description || '',
-        need_render: row.need_render ?? false,
-        wait_load: row.wait_load ?? 0,
-        enable_cache: row.enable_cache ?? false,
-        timeout: row.timeout ?? 30,
-        ai_enabled: row.ai_enabled ?? false,
-        ai_provider: row.ai_provider || '',
-        ai_model: row.ai_model || '',
-        ai_api_url: row.ai_api_url || '',
-        ai_api_key: row.ai_api_key || '',
-        user_prompt: row.user_prompt || ''
-      }
-      this.activeTab = 'create'
-    }
+  console.log('🔍 点击重新编辑，row:', row)  // ✅ 添加
+  this.editingId = row.id
+  console.log('🔍 editingId:', this.editingId)  // ✅ 添加
+  this.form = {
+    name: row.name || '',
+    seed_url: row.seed_url || '',
+    category: row.category || '',
+    description: row.description || '',
+    need_render: row.need_render ?? false,
+    wait_load: row.wait_load ?? 0,
+    enable_cache: row.enable_cache ?? false,
+    timeout: row.timeout ?? 30,
+    ai_enabled: row.ai_enabled ?? false,
+    ai_provider: row.ai_provider || '',
+    ai_model: row.ai_model || '',
+    ai_api_url: row.ai_api_url || '',
+    ai_api_key: row.ai_api_key || '',
+    user_prompt: row.user_prompt || ''
+  }
+  this.activeTab = 'create'
+  this.$message.info('重新编辑后提交，状态将变为"待审核"')
+}
   }
 }
 </script>
@@ -497,7 +461,6 @@ export default {
   padding: 10px 20px;
 }
 
-/* 表格卡片（与卡片等宽，无悬停效果） */
 .submission-table {
   margin-top: 32px;
   margin-bottom: 0;
@@ -525,7 +488,6 @@ export default {
   background-color: #f5f7fa;
 }
 
-/* 操作按钮间距微调 */
 .el-table .el-button--small {
   margin: 2px 4px;
 }

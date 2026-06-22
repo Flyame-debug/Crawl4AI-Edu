@@ -373,14 +373,14 @@ class TemplateAdmin(BaseAdmin):
     """模板管理 - V2.0（含分类、AI配置字段）"""
     
     list_display = [
-        'id', 'name', 'category_badge', 'seed_url_short', 
+        'id', 'name', 'category_badge', 'seed_url_short', "status",
         'ai_model_short', 'tags_display', 'usage_count', 'created_at'
     ]
     list_filter = ['category', 'status', 'is_public', 'created_at']
     search_fields = ['name', 'description', 'seed_url', 'user_prompt']
     list_per_page = 20
     readonly_fields = ['usage_count', 'created_at', 'updated_at']
-    
+    actions = ['approve_templates', 'reject_templates']
     fieldsets = (
         ('基本信息', {
             'fields': ('name', 'seed_url', 'category', 'tags', 'description', 'status', 'is_public')
@@ -399,7 +399,29 @@ class TemplateAdmin(BaseAdmin):
             'classes': ('collapse',)
         }),
     )
+    @admin.action(description='✅ 通过选中的模板')
+    def approve_templates(self, request, queryset):
+        from django.utils import timezone
+        count = 0
+        for template in queryset.filter(status='pending'):
+            template.status = 'approved'
+            template.is_public = True
+            template.reviewed_at = timezone.now()
+            template.save()  # ✅ 使用 save()
+            count += 1
+        self.message_user(request, f'✅ 已通过 {count} 个模板')
     
+    @admin.action(description='❌ 驳回选中的模板')
+    def reject_templates(self, request, queryset):
+        from django.utils import timezone
+        count = 0
+        for template in queryset.filter(status='pending'):
+            template.status = 'rejected'
+            template.reviewed_at = timezone.now()
+            template.save()  # ✅ 使用 save()
+            count += 1
+        self.message_user(request, f'❌ 已驳回 {count} 个模板')
+        
     def category_badge(self, obj):
         colors = {
             'teacher': '#28a745',

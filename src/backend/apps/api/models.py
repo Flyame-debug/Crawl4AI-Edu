@@ -231,7 +231,17 @@ class Template(models.Model):
     tags = models.JSONField(default=list, blank=True, verbose_name="标签列表")
     description = models.TextField(blank=True, verbose_name="模板描述")
     config = models.JSONField(default=dict, verbose_name="爬虫配置")
-    
+    # 审核相关字段
+    review_comment = models.TextField(blank=True, null=True, verbose_name="审核意见")
+    reviewed_at = models.DateTimeField(blank=True, null=True, verbose_name="审核时间")
+    reviewed_by = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_templates',
+        verbose_name="审核人"
+    )
     # V2.0 新增字段
     category = models.CharField(
         max_length=50, 
@@ -261,7 +271,7 @@ class Template(models.Model):
     status = models.CharField(
         max_length=20, 
         choices=STATUS_CHOICES, 
-        default='approved',
+        default='pending',
         verbose_name="审核状态"
     )
     created_by = models.ForeignKey(

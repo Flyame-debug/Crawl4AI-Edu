@@ -77,7 +77,7 @@ urlpatterns = [
     path('tasks/<str:task_id>/pause/', views.pause_task, name='pause_task'),
     path('tasks/<str:task_id>/stop/', views.stop_task, name='stop_task'),
     path('tasks/<str:task_id>/delete/', views.delete_task, name='delete_task'),
-    
+    path('templates/<int:pk>/review/', views.review_template, name='review_template'),
     # ---------- 任务查询 ----------
     path('tasks/', views.task_list_api, name='task_list'),
     path('tasks/<str:task_id>/detail/', views.task_detail_api, name='task_detail'),

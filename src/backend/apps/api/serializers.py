@@ -73,6 +73,7 @@ class TemplateSerializer(serializers.ModelSerializer):
         }
 
 
+# serializers.py
 class TemplateListSerializer(serializers.ModelSerializer):
     """模板列表序列化器（精简版）"""
     
@@ -84,9 +85,12 @@ class TemplateListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'seed_url', 'tags', 'category', 'category_display',
             'ai_model', 'user_prompt', 'usage_count', 'created_at',
-            'created_by_name', 'crawler_rule'
+            'created_by_name', 'crawler_rule',
+            'status',  # ✅ 存在
+            'review_comment',  # ✅ 存在
+            'description',  # ✅ 存在
+            'is_public',  # ✅ 存在
         ]
-
 
 class UserSerializer(serializers.ModelSerializer):
     """用户序列化器"""

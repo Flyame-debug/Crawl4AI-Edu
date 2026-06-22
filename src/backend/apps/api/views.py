@@ -1157,6 +1157,7 @@ def template_update(request, pk):
     try:
         template = Template.objects.get(pk=pk)
         
+        # 更新字段
         template.name = request.data.get('name', template.name)
         template.seed_url = request.data.get('seed_url', template.seed_url)
         template.tags = request.data.get('tags', template.tags)
@@ -1167,6 +1168,12 @@ def template_update(request, pk):
         template.user_prompt = request.data.get('user_prompt', template.user_prompt)
         template.description = request.data.get('description', template.description)
         template.config = request.data.get('config', template.config)
+        
+        # ✅ 关键修复：如果状态是 rejected，重新提交时改为 pending
+        if template.status == 'rejected':
+            template.status = 'pending'
+            template.review_comment = ''  # 清空驳回原因
+        
         template.save()
         
         return Response({
@@ -1176,7 +1183,6 @@ def template_update(request, pk):
         })
     except Template.DoesNotExist:
         return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
-
 
 @api_view(['DELETE'])
 def template_delete(request, pk):
@@ -1841,3 +1847,71 @@ def proxy_html(request):
             'msg': str(e),
             'data': {'skeleton': '<div>示例页面结构</div>'}
         })
+        
+@api_view(['POST'])
+def review_template(request, pk):
+    """
+    审核模板（管理员专用）
+    
+    Body:
+        {
+            "action": "approve" | "reject",
+            "comment": "驳回原因（驳回时必填）"
+        }
+    """
+    # 权限检查：只有管理员可以审核
+    if not request.user.is_authenticated:
+        return Response({'code': 401, 'msg': '请先登录'}, status=401)
+    
+    # 检查是否是管理员（is_staff 或自定义角色）
+    if not request.user.is_staff:
+        return Response({'code': 403, 'msg': '权限不足，仅管理员可审核'}, status=403)
+    
+    try:
+        template = Template.objects.get(pk=pk)
+    except Template.DoesNotExist:
+        return Response({'code': 404, 'msg': '模板不存在'}, status=404)
+    
+    # 检查模板状态
+    if template.status != 'pending':
+        return Response({'code': 400, 'msg': f'模板已处理，当前状态: {template.status}'}, status=400)
+    
+    action = request.data.get('action')
+    comment = request.data.get('comment', '')
+    
+    if action == 'approve':
+        template.status = 'approved'
+        template.review_comment = comment or '审核通过'
+        template.reviewed_at = timezone.now()
+        template.reviewed_by = request.user
+        template.is_public = True  # 通过后公开
+        template.save()
+        return Response({
+            'code': 200,
+            'msg': '模板已审核通过',
+            'data': {
+                'template_id': pk,
+                'status': 'approved'
+            }
+        })
+    
+    elif action == 'reject':
+        if not comment:
+            return Response({'code': 400, 'msg': '驳回时必须填写原因'}, status=400)
+        template.status = 'rejected'
+        template.review_comment = comment
+        template.reviewed_at = timezone.now()
+        template.reviewed_by = request.user
+        template.save()
+        return Response({
+            'code': 200,
+            'msg': '模板已驳回',
+            'data': {
+                'template_id': pk,
+                'status': 'rejected',
+                'comment': comment
+            }
+        })
+    
+    else:
+        return Response({'code': 400, 'msg': 'action 必须是 approve 或 reject'}, status=400)
