@@ -89,7 +89,6 @@
 
     <!-- 操作按钮区 -->
     <div class="actions">
-      <!-- AI 规则生成中的提示 -->
       <div v-if="generating" class="generating-status">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>🤖 AI正在分析网页结构并生成规则...</span>
@@ -100,7 +99,7 @@
       </el-button>
     </div>
 
-    <!-- 预览弹窗（Markdown 渲染） -->
+    <!-- 预览弹窗 -->
     <el-dialog v-model="previewVisible" title="采集预览" width="60%" :close-on-click-modal="false">
       <div v-if="previewLoading" v-loading="previewLoading" style="min-height: 100px;"></div>
       <div v-else class="markdown-body" v-html="previewHtml"></div>
@@ -157,10 +156,10 @@ def fetch_data(url):
       advancedOpen: false,
       previewVisible: false,
       previewLoading: false,
-      previewHtml: '',        // Markdown 渲染结果
+      previewHtml: '',
       submitting: false,
-      generating: false,      // AI 规则生成中
-      _generating: false,     // 防止重复点击
+      generating: false,
+      _generating: false,
       rules: {
         targetUrls: [{ required: true, message: '请输入目标网址', trigger: 'blur' }],
         renderPage: [{ required: true, message: '请选择页面渲染方式', trigger: 'change' }],
@@ -261,13 +260,16 @@ def fetch_data(url):
     async fetchHtmlSkeleton(url) {
       try {
         const apiUrl = '/api/proxy/html/?skeleton=true&url=' + encodeURIComponent(url)
+        console.log('🔗 请求HTML骨架:', apiUrl)
         const response = await fetch(apiUrl, {
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
         })
         if (response.ok) {
           const data = await response.json()
+          console.log('📄 HTML骨架响应:', data)
           if (data.data && data.data.skeleton) {
-            return this.extractSkeleton(data.data.skeleton)
+            const skeleton = this.extractSkeleton(data.data.skeleton)
+            return skeleton
           }
         }
       } catch (e) {
@@ -358,17 +360,26 @@ def fetch_data(url):
       this.aiConfig.prompts.splice(index, 1)
     },
 
-    // ===== 预览采集（Markdown 渲染） =====
+    // ===== 预览采集 =====
     async previewCollect() {
+      console.log('🔍 ===== ConfigPanel 调试信息 =====')
+      console.log('🔍 this.template:', this.template)
+      console.log('🔍 this.template.id:', this.template?.id)
+      console.log('🔍 ================================')
+
       const valid = await this.$refs.configForm.validate().catch(() => false)
       if (!valid) {
         this.$message.error('请填写所有必填项')
         return
       }
+
       this.submitting = true
       try {
+        const templateId = this.template?.id || this.$route?.params?.id
+        console.log('🔍 使用的模板ID:', templateId)
+
         const payload = {
-          template_id: this.template.id || null,
+          template_id: templateId || null,
           task_type: 'preview',
           user_prompt: this.aiConfig.prompts.join('\n'),
           ai_model: this.aiConfig.model,
@@ -376,28 +387,26 @@ def fetch_data(url):
           ai_api_key: this.aiConfig.apiKey,
           generated_rule: this.advancedCode
         }
-        console.log('📤 启动任务请求:', payload)
+
+        console.log('📤 启动任务请求:', JSON.stringify(payload, null, 2))
         const res = await startTask(payload)
-        if (res.data.code === 200) {
+
+        if (res.data && res.data.code === 200) {
           this.$message.success('预览采集任务已启动')
           this.previewVisible = true
-          const extracted = res.data.data?.extracted_data || ''
-          if (extracted && typeof extracted === 'string') {
-            this.previewHtml = marked(extracted)
+          const taskId = res.data.data?.task_id || res.data.data?.id
+
+          if (taskId) {
+            await this.fetchPreviewData(taskId)
           } else {
-            const taskId = res.data.data?.task_id || res.data.data?.id
-            if (taskId) {
-              await this.fetchPreviewData(taskId)
-            } else {
-              this.previewHtml = '<p>未获取到任务ID，无法显示预览</p>'
-            }
+            this.previewHtml = marked('### 示例采集结果\n\n- 未获取到任务ID')
           }
         } else {
-          this.$message.error(res.data.msg || '启动失败')
+          this.$message.error(res.data?.msg || '启动失败')
         }
       } catch (error) {
-        console.error('启动预览采集失败:', error)
-        this.$message.error('启动失败，显示示例数据')
+        console.error('❌ 启动预览采集失败:', error)
+        this.$message.error('启动失败，请稍后重试')
         this.previewVisible = true
         this.previewHtml = marked('### 示例采集结果\n\n- 标题：示例数据\n- 网址：http://example.com')
       } finally {
@@ -409,18 +418,39 @@ def fetch_data(url):
       this.previewLoading = true
       try {
         const res = await getTaskPreview(taskId, 10)
-        if (res.data.code === 200) {
+        console.log('📥 预览数据响应:', res)
+
+        if (res.data && res.data.code === 200) {
           const extracted = res.data.data?.extracted_data || ''
           if (extracted && typeof extracted === 'string') {
             this.previewHtml = marked(extracted)
           } else {
-            this.previewHtml = '<p>暂无预览数据</p>'
+            const previewList = res.data.data?.preview || []
+            if (previewList.length > 0) {
+              let html = '### 📊 采集预览\n\n'
+              previewList.forEach((item, idx) => {
+                html += `#### 记录 ${idx + 1}\n\n`
+                html += `- **URL**: ${item.url || '未知'}\n`
+                html += `- **分类**: ${item.category || '未知'}\n`
+                if (item.extracted_data) {
+                  if (typeof item.extracted_data === 'string') {
+                    html += `- **数据**:\n${item.extracted_data}\n`
+                  } else {
+                    html += `- **数据**: \`${JSON.stringify(item.extracted_data)}\`\n`
+                  }
+                }
+                html += '\n---\n\n'
+              })
+              this.previewHtml = marked(html)
+            } else {
+              this.previewHtml = '<p>暂无预览数据</p>'
+            }
           }
         } else {
           this.previewHtml = '<p>获取预览失败</p>'
         }
       } catch (error) {
-        console.error('获取预览数据失败:', error)
+        console.error('❌ 获取预览数据失败:', error)
         this.previewHtml = '<p>获取预览失败</p>'
       } finally {
         this.previewLoading = false
@@ -464,15 +494,6 @@ def fetch_data(url):
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-.switch-row {
-  margin-bottom: 0;
-}
-.hint {
-  font-size: 12px;
-  color: #888;
-  margin-top: 4px;
-  display: block;
 }
 .prompt-row {
   display: flex;
@@ -563,7 +584,6 @@ def fetch_data(url):
   color: #909399;
   margin-left: 8px;
 }
-/* Markdown 预览样式 */
 .markdown-body {
   padding: 10px;
   line-height: 1.7;

@@ -342,7 +342,75 @@ def get_dashboard_stats(request):
             }
         }
     })
-
+@api_view(['GET'])
+def template_stats(request, pk):
+    """获取模板的统计信息"""
+    try:
+        template = Template.objects.get(pk=pk)
+    except Template.DoesNotExist:
+        return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
+    
+    # 获取该模板的所有任务（排除预览任务）
+    tasks = CrawlTask.objects.filter(template=template).exclude(task_type='preview')
+    
+    # 基础统计
+    total_tasks = tasks.count()
+    completed_tasks = tasks.filter(status='completed').count()
+    failed_tasks = tasks.filter(status='failed').count()
+    running_tasks = tasks.filter(status='running').count()
+    
+    success_rate = round(completed_tasks / max(total_tasks, 1) * 100, 2)
+    
+    # 数据总量
+    total_pages = tasks.aggregate(total=models.Sum('total_pages'))['total'] or 0
+    success_pages = tasks.aggregate(total=models.Sum('success_pages'))['total'] or 0
+    
+    # 近7天趋势
+    from datetime import datetime, timedelta
+    daily_stats = []
+    for i in range(6, -1, -1):
+        day = datetime.now().date() - timedelta(days=i)
+        count = tasks.filter(created_at__date=day).count()
+        daily_stats.append({
+            'date': day.isoformat(),
+            'count': count
+        })
+    
+    # 近7天数据量趋势
+    daily_pages = []
+    for i in range(6, -1, -1):
+        day = datetime.now().date() - timedelta(days=i)
+        total = tasks.filter(created_at__date=day).aggregate(
+            total=models.Sum('total_pages')
+        )['total'] or 0
+        daily_pages.append({
+            'date': day.isoformat(),
+            'pages': total
+        })
+    
+    # 最近5个任务
+    recent_tasks = tasks.order_by('-created_at')[:5].values(
+        'task_id', 'task_name', 'status', 'total_pages', 'success_pages', 'created_at'
+    )
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'template_id': pk,
+            'template_name': template.name,
+            'total_tasks': total_tasks,
+            'completed_tasks': completed_tasks,
+            'failed_tasks': failed_tasks,
+            'running_tasks': running_tasks,
+            'success_rate': success_rate,
+            'total_pages': total_pages,
+            'success_pages': success_pages,
+            'daily_stats': daily_stats,
+            'daily_pages': daily_pages,
+            'recent_tasks': list(recent_tasks)
+        }
+    })
 
 @api_view(['GET'])
 def get_crawler_status(request):
@@ -452,37 +520,105 @@ def list_crawl_tasks(request):
 
 @api_view(['GET'])
 def get_logs(request):
-    """日志查询"""
+    """日志查询 - 支持按任务ID查询"""
+    task_id = request.query_params.get('task_id', None)
     log_file = request.query_params.get('file', 'crawl4ai.log')
     lines = min(int(request.query_params.get('lines', 100)), 1000)
     level = request.query_params.get('level', 'ALL').upper()
     
     log_dir = Path(__file__).resolve().parent.parent.parent / 'logs'
+    
+    # ✅ 如果有 task_id，读取任务专属日志
+    if task_id:
+        task_log_dir = log_dir / 'tasks'
+        log_path = task_log_dir / f'task_{task_id}.log'
+        
+        if not log_path.exists():
+            return Response({
+                'code': 200,
+                'msg': 'success',
+                'data': {
+                    'logs': [],
+                    'total': 0,
+                    'task_id': task_id,
+                    'message': '该任务暂无日志'
+                }
+            })
+        
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+                recent_lines = all_lines[-lines:]
+            
+            if level != 'ALL':
+                recent_lines = [line for line in recent_lines if f' {level} ' in line or line.startswith(level)]
+            
+            return Response({
+                'code': 200,
+                'msg': 'success',
+                'data': {
+                    'logs': recent_lines,
+                    'total': len(recent_lines),
+                    'task_id': task_id,
+                    'file': str(log_path)
+                }
+            })
+        except Exception as e:
+            return Response({
+                'code': 500,
+                'msg': f'读取日志失败: {str(e)}',
+                'data': {
+                    'logs': [],
+                    'total': 0,
+                    'error': str(e)
+                }
+            }, status=500)
+    
+    # 如果没有 task_id，读取全局日志
     log_path = log_dir / log_file
     
     if not log_path.exists():
         return Response({
             'code': 200,
             'msg': 'success',
-            'data': {'logs': [], 'total': 0, 'message': '日志文件不存在'}
+            'data': {
+                'logs': [],
+                'total': 0,
+                'message': '日志文件不存在'
+            }
         })
     
-    with open(log_path, 'r', encoding='utf-8') as f:
-        all_lines = f.readlines()
-        recent_lines = all_lines[-lines:]
-    
-    if level != 'ALL':
-        recent_lines = [line for line in recent_lines if f' {level} ' in line or line.startswith(level)]
-    
-    return Response({
-        'code': 200,
-        'msg': 'success',
-        'data': {'logs': recent_lines, 'total': len(recent_lines), 'file': str(log_path)}
-    })
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+            recent_lines = all_lines[-lines:]
+        
+        if level != 'ALL':
+            recent_lines = [line for line in recent_lines if f' {level} ' in line or line.startswith(level)]
+        
+        return Response({
+            'code': 200,
+            'msg': 'success',
+            'data': {
+                'logs': recent_lines,
+                'total': len(recent_lines),
+                'file': str(log_path)
+            }
+        })
+    except Exception as e:
+        return Response({
+            'code': 500,
+            'msg': f'读取日志失败: {str(e)}',
+            'data': {
+                'logs': [],
+                'total': 0,
+                'error': str(e)
+            }
+        }, status=500)
 
 @api_view(['GET'])
 def get_log_files(request):
-    """获取日志文件列表"""
+    """获取日志文件列表（包含任务日志）"""
     log_dir = Path(__file__).resolve().parent.parent.parent / 'logs'
     
     if not log_dir.exists():
@@ -493,12 +629,26 @@ def get_log_files(request):
         })
     
     files = []
+    
+    # 全局日志文件
     for f in log_dir.glob('*.log'):
         files.append({
             'name': f.name,
             'size': f.stat().st_size,
-            'modified': f.stat().st_mtime
+            'modified': f.stat().st_mtime,
+            'type': 'global'
         })
+    
+    # 任务日志文件
+    task_log_dir = log_dir / 'tasks'
+    if task_log_dir.exists():
+        for f in task_log_dir.glob('*.log'):
+            files.append({
+                'name': f.name,
+                'size': f.stat().st_size,
+                'modified': f.stat().st_mtime,
+                'type': 'task'
+            })
     
     files.sort(key=lambda x: x['modified'], reverse=True)
     
@@ -507,7 +657,7 @@ def get_log_files(request):
         'msg': 'success',
         'data': {'files': files}
     })
-
+    
 @api_view(['GET'])
 def health_check(request):
     """服务健康检查"""
@@ -721,7 +871,7 @@ def start_crawl_task_api(request):
     user_prompt = request.data.get('user_prompt', '')
     ai_model = request.data.get('ai_model', 'qwen2:7b')
     ai_api_url = request.data.get('ai_api_url', 'http://127.0.0.1:11434')
-    
+    template_id = request.data.get('template_id', None)  # ✅ 新增
     if not seed_url:
         return Response({'code': 400, 'msg': 'seed_url不能为空', 'data': None}, status=400)
     
@@ -734,11 +884,19 @@ def start_crawl_task_api(request):
                 'msg': '预览任务最多支持10条数据，请删除旧预览任务后重试', 
                 'data': None
             }, status=400)
-    
+    # ✅ 获取模板对象
+    template_obj = None
+    if template_id:
+        try:
+            template_obj = Template.objects.get(pk=template_id)
+        except Template.DoesNotExist:
+            return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
+        
     task = CrawlTask.objects.create(
         seed_url=seed_url,
         max_depth=max_depth,
         task_type=task_type,
+        template=template_obj,  # ✅ 关联模板
         status='pending'
     )
     
@@ -1069,6 +1227,11 @@ def template_history(request):
 @api_view(['POST'])
 def start_task(request):
     """启动采集任务（核心改造，区分预览/正式）"""
+    print("=" * 60)
+    print("📥 收到 start_task 请求")
+    print(f"📥 request.data: {request.data}")
+    print(f"📥 template_id: {request.data.get('template_id')}")
+    print("=" * 60)
     template_id = request.data.get('template_id')
     task_type = request.data.get('task_type', 'formal')
     user_prompt = request.data.get('user_prompt', '')
@@ -1089,25 +1252,25 @@ def start_task(request):
     
     seed_url = None
     template_name = None
+    template_obj = None
     
     if template_id:
         try:
-            template = Template.objects.get(pk=template_id)
-            seed_url = template.seed_url
-            template_name = template.name
-            template.usage_count += 1
-            template.save()
+            template_obj = Template.objects.get(pk=template_id)
+            seed_url = template_obj.seed_url
+            template_name = template_obj.name
+            template_obj.usage_count += 1
+            template_obj.save()
             
             # 记录历史使用
             if request.user.is_authenticated:
                 UserTemplateHistory.objects.get_or_create(
                     user=request.user,
-                    template=template
+                    template=template_obj
                 )
             
-            # 如果模板有user_prompt且请求未提供，使用模板的
-            if not user_prompt and template.user_prompt:
-                user_prompt = template.user_prompt
+            if not user_prompt and template_obj.user_prompt:
+                user_prompt = template_obj.user_prompt
             
         except Template.DoesNotExist:
             return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
@@ -1117,21 +1280,24 @@ def start_task(request):
     if not seed_url:
         return Response({'code': 400, 'msg': 'seed_url不能为空', 'data': None}, status=400)
     
-    # 生成任务名称
     from datetime import datetime
     task_name = f"{template_name or '采集任务'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     config = request.data.get('config', {'max_depth': 2, 'max_concurrent': 5})
     
+    # ✅ 关键修复：确保 template 对象正确关联
     task = CrawlTask.objects.create(
         task_name=task_name,
         task_type=task_type,
-        template_id=template_id,
+        template=template_obj,  # ← 这里使用 template 对象
         seed_url=seed_url,
         max_depth=config.get('max_depth', 2),
-        generated_rule=generated_rule,  # ← 添加这一行
+        generated_rule=generated_rule,
         status='pending'
     )
+    
+    # ✅ 打印日志确认关联
+    print(f"✅ 创建任务: {task.task_name}, 关联模板: {task.template.name if task.template else '无'}")
     
     # 启动后台爬虫线程
     thread = threading.Thread(
@@ -1151,7 +1317,6 @@ def start_task(request):
             'created_at': task.created_at
         }
     })
-
 
 @api_view(['POST'])
 def pause_task(request, task_id):
@@ -1225,10 +1390,18 @@ def task_list_api(request):
     """任务列表（支持状态筛选）"""
     status_filter = request.query_params.get('status', '')
     task_type = request.query_params.get('task_type', '')
+    include_preview = request.query_params.get('include_preview', 'false')
     page = int(request.query_params.get('page', 1))
     page_size = int(request.query_params.get('page_size', 20))
-    
+    template_id = request.query_params.get('template_id', None)  
     queryset = CrawlTask.objects.all()
+    # ✅ 按模板ID筛选
+    if template_id:
+        queryset = queryset.filter(template_id=template_id)
+    # 默认排除预览任务
+    if include_preview.lower() != 'true':
+        queryset = queryset.exclude(task_type='preview')
+    
     if status_filter:
         queryset = queryset.filter(status=status_filter)
     if task_type:
@@ -1251,12 +1424,16 @@ def task_list_api(request):
             seconds = delta.total_seconds() % 60
             duration = f"{int(minutes):02d}:{int(seconds):02d}"
         
+        template_obj = t.template
+        template_id_val = template_obj.id if template_obj else t.template_id
+        
         result_list.append({
             'task_id': str(t.task_id),
             'task_name': t.task_name or f"任务_{t.created_at.strftime('%Y%m%d_%H%M%S')}",
             'task_type': t.task_type,
             'generated_rule': t.generated_rule,
-            'template_name': t.template.name if t.template else None,
+            'template_id': template_id_val,      # ✅ 新增：模板ID
+            'template_name': template_obj.name if template_obj else None,
             'status': t.status,
             'duration': duration or '00:00',
             'progress': f"{t.success_pages}/{t.total_pages}" if t.total_pages > 0 else '0/0',
@@ -1279,7 +1456,6 @@ def task_list_api(request):
             'results': result_list
         }
     })
-
 
 @api_view(['GET'])
 def task_detail_api(request, task_id):
@@ -1334,34 +1510,67 @@ def task_preview_api(request, task_id):
     limit = int(request.query_params.get('limit', 10))
     
     try:
-        task = CrawlTask.objects.get(task_id=task_id)
+        # 尝试将 task_id 转换为 UUID
+        import uuid
+        try:
+            task_uuid = uuid.UUID(task_id)
+        except ValueError:
+            # 如果 task_id 不是 UUID 格式，尝试用字符串查询
+            task_uuid = task_id
         
-        task_id_str = str(task.task_id)
-        pages = PageSnapshot.objects.filter(task_id=task_id_str).order_by('-created_at')[:limit]
-
+        # 查询任务
+        try:
+            if isinstance(task_uuid, uuid.UUID):
+                task = CrawlTask.objects.get(task_id=task_uuid)
+            else:
+                task = CrawlTask.objects.get(task_id=task_id)
+        except CrawlTask.DoesNotExist:
+            return Response({
+                'code': 404,
+                'msg': f'任务不存在: {task_id}',
+                'data': None
+            }, status=404)
+        
+        # 查询关联的页面快照
+        pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
+        
         preview = []
         for page in pages:
             if page.extracted_data:
+                # 如果有提取的数据，直接返回
                 preview.append(page.extracted_data)
             else:
+                # 否则返回基本信息
                 preview.append({
                     'url': page.url,
                     'category': page.category,
                     'markdown_preview': page.markdown[:500] if page.markdown else '',
-                    'created_at': page.created_at
+                    'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
                 })
+        
+        total = PageSnapshot.objects.filter(task=task).count()
         
         return Response({
             'code': 200,
             'msg': 'success',
             'data': {
-                'total': PageSnapshot.objects.filter(task_id=task_id_str).count(),
+                'total': total,
                 'preview': preview
             }
         })
-    except CrawlTask.DoesNotExist:
-        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
-
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"❌ task_preview_api 错误: {error_detail}")
+        return Response({
+            'code': 500,
+            'msg': f'获取预览数据失败: {str(e)}',
+            'data': {
+                'total': 0,
+                'preview': []
+            }
+        }, status=500)
 
 @api_view(['GET'])
 def task_download_api(request, task_id):
@@ -1423,6 +1632,7 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     import sys
     import os
     from pathlib import Path
+    import logging
     
     # 设置Django环境
     current_file = Path(__file__).resolve()
@@ -1441,6 +1651,35 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     
     from django.utils import timezone
     from apps.api.models import CrawlTask
+    
+    # ✅ 为当前任务创建独立的 logger
+    task_logger = logging.getLogger(f'crawl_task_{task_id}')
+    task_logger.setLevel(logging.DEBUG)
+    task_logger.handlers.clear()
+    
+    # 创建任务日志目录
+    log_dir = Path(__file__).resolve().parent.parent.parent / 'logs' / 'tasks'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # ✅ 独立日志文件：logs/tasks/task_{task_id}.log
+    log_file = log_dir / f'task_{task_id}.log'
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    task_logger.addHandler(file_handler)
+    
+    # 同时保留控制台输出
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    task_logger.addHandler(console_handler)
+    
+    task_logger.info(f"🚀 任务 {task_id} 开始执行")
+    task_logger.info(f"📌 种子URL: {seed_url}")
+    task_logger.info(f"📏 最大深度: {max_depth}")
+    task_logger.info(f"⚙️ 配置: {config}")
     
     # 添加sandbox路径
     sandbox_path = PROJECT_ROOT / "sandbox"
@@ -1462,18 +1701,23 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             status='running',
             started_at=timezone.now()
         )
+        task_logger.info(f"✅ 任务状态已更新为 running")
         
         # 导入爬虫模块
         try:
             from standalone_crawler.crawler import crawl as run_crawl
         except ImportError as e:
             raise Exception(f"导入爬虫模块失败: {str(e)}")
+        
         # 创建 API 客户端
         from standalone_crawler.api_client import APIClient
         api_client = APIClient(base_url='http://127.0.0.1:8000')
+        
         # 创建事件循环并运行爬虫
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        task_logger.info(f"🔄 开始爬取: {seed_url}")
         
         crawl_task = loop.create_task(run_crawl(
             seed_url=seed_url,
@@ -1483,14 +1727,15 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             allowed_domains=config.get('allowed_domains', []),
             white_list_patterns=config.get('white_list_patterns', []),
             enable_dead_check=config.get('enable_dead_check', False),
-            api_client=api_client,  # ← 添加这一行
-            task_id=task_id,  
+            api_client=api_client,
+            task_id=task_id,
         ))
         
         # 定期检查停止信号
         while not crawl_task.done():
             with TASK_CONTROL_LOCK:
                 if task_id in TASK_CONTROL_SIGNALS and TASK_CONTROL_SIGNALS[task_id].get('is_stop'):
+                    task_logger.warning(f"⏹️ 任务 {task_id} 被用户停止")
                     crawl_task.cancel()
                     try:
                         loop.run_until_complete(crawl_task)
@@ -1509,18 +1754,28 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             stats = crawl_task.result()
             loop.close()
             
+            total_pages = stats.total if hasattr(stats, 'total') else 0
+            success_pages = stats.success if hasattr(stats, 'success') else 0
+            failed_pages = stats.failed if hasattr(stats, 'failed') else 0
+            report = stats.report() if hasattr(stats, 'report') else ""
+            
+            task_logger.info(f"✅ 爬取完成! 总计: {total_pages}, 成功: {success_pages}, 失败: {failed_pages}")
+            
             CrawlTask.objects.filter(task_id=task_id).update(
                 status='completed',
-                total_pages=stats.total if hasattr(stats, 'total') else 0,
-                success_pages=stats.success if hasattr(stats, 'success') else 0,
-                failed_pages=stats.failed if hasattr(stats, 'failed') else 0,
-                report=stats.report() if hasattr(stats, 'report') else "",
+                total_pages=total_pages,
+                success_pages=success_pages,
+                failed_pages=failed_pages,
+                report=report,
                 completed_at=timezone.now(),
                 updated_at=timezone.now()
             )
+            task_logger.info(f"✅ 任务状态已更新为 completed")
         
     except Exception as e:
-        logger.error(f"爬虫异常: {str(e)}")
+        task_logger.error(f"❌ 爬虫异常: {str(e)}")
+        task_logger.exception("详细错误堆栈:")
+        
         with TASK_CONTROL_LOCK:
             is_stop = task_id in TASK_CONTROL_SIGNALS and TASK_CONTROL_SIGNALS[task_id].get('is_stop', False)
             status = 'stopped' if is_stop else 'failed'
@@ -1531,9 +1786,12 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             completed_at=timezone.now(),
             updated_at=timezone.now()
         )
+        task_logger.info(f"✅ 任务状态已更新为 {status}")
+        
     finally:
         with TASK_CONTROL_LOCK:
             TASK_CONTROL_SIGNALS.pop(task_id, None)
+        task_logger.info(f"🏁 任务 {task_id} 执行结束")
 
 @api_view(['GET'])
 def proxy_html(request):
