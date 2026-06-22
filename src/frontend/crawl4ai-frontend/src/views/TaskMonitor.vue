@@ -1,6 +1,6 @@
 <template>
   <div class="task-list-page">
-    <!-- 搜索卡片（不变） -->
+    <!-- 搜索卡片 -->
     <el-card class="search-card" shadow="hover">
       <div class="filters">
         <div class="filter-row">
@@ -38,7 +38,7 @@
       </div>
     </el-card>
 
-    <!-- 任务列表表格（不变） -->
+    <!-- 任务列表表格 -->
     <el-table :data="tasks" class="task-table" empty-text="暂无任务" v-loading="loading">
       <el-table-column prop="task_name" label="任务名称" width="120" />
       <el-table-column prop="template_source" label="模板来源" width="120" />
@@ -63,7 +63,6 @@
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <!-- 修改：改为导出 HTML 和 Markdown -->
                   <el-dropdown-item @click="exportTask(scope.row, 'html')">导出 HTML</el-dropdown-item>
                   <el-dropdown-item @click="exportTask(scope.row, 'markdown')">导出 Markdown</el-dropdown-item>
                 </el-dropdown-menu>
@@ -73,14 +72,28 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- 预览结果 Markdown 弹窗 -->
+    <el-dialog
+      v-model="detailDialogVisible"
+      title="预览结果"
+      width="700px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="detailLoading" v-loading="detailLoading" style="min-height: 100px;"></div>
+      <div v-else class="markdown-body" v-html="detailHtml"></div>
+      <template #footer>
+        <el-button @click="detailDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-// 注意：不再需要 downloadTaskResult
 import { getTasks, getTaskDetail, startTask } from '@/api/tasks'
+import { marked } from 'marked'
 
 export default {
   name: 'TaskMonitor',
@@ -95,7 +108,11 @@ export default {
         tool: '',
         status: '',
         dateRange: []
-      }
+      },
+      // 预览弹窗相关
+      detailDialogVisible: false,
+      detailLoading: false,
+      detailHtml: ''
     }
   },
   mounted() {
@@ -154,16 +171,28 @@ export default {
       const map = { running: 'primary', success: 'success', failed: 'danger' }
       return map[status] || 'info'
     },
+    // 查看预览结果：打开 Markdown 弹窗
     async viewDetail(task) {
+      this.detailLoading = true
+      this.detailDialogVisible = true
       try {
         const res = await getTaskDetail(task.id)
         if (res.data.code === 200) {
-          ElMessageBox.alert(JSON.stringify(res.data.data, null, 2), '任务详情')
+          const data = res.data.data || {}
+          const markdownContent = data.extracted_data || ''
+          if (markdownContent && typeof markdownContent === 'string') {
+            this.detailHtml = marked(markdownContent)
+          } else {
+            // 无 extracted_data 时回退显示 JSON
+            this.detailHtml = `<pre>${JSON.stringify(data, null, 2)}</pre>`
+          }
         } else {
-          ElMessageBox.alert(JSON.stringify(task, null, 2), '任务详情（本地数据）')
+          this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
         }
       } catch {
-        ElMessageBox.alert(JSON.stringify(task, null, 2), '任务详情')
+        this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
+      } finally {
+        this.detailLoading = false
       }
     },
     viewLog(task) {
@@ -193,30 +222,23 @@ export default {
         }
       }
     },
-
-    // ========== 新的导出逻辑 ==========
+    // 导出 HTML / Markdown
     async exportTask(task, format) {
       try {
-        // 1. 获取任务详情（包含采集到的数据）
         const res = await getTaskDetail(task.id)
         if (res.data.code !== 200) {
           ElMessage.error('获取任务数据失败')
           return
         }
         const taskData = res.data.data
-
-        // 2. 提取数据数组（字段名可能需要根据实际情况调整）
         const rows = taskData.results || taskData.data_list || []
         if (!Array.isArray(rows)) {
           ElMessage.warning('该任务没有可导出的数据')
           return
         }
-
-        // 3. 根据格式生成文件内容
         let content = ''
         let mimeType = ''
         let fileExtension = ''
-
         if (format === 'html') {
           content = this.generateHTML(taskData, rows)
           mimeType = 'text/html'
@@ -229,8 +251,6 @@ export default {
           ElMessage.error('不支持的格式')
           return
         }
-
-        // 4. 创建 Blob 并下载（加 BOM 防止中文乱码）
         const blob = new Blob(['\ufeff' + content], { type: mimeType })
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
@@ -244,8 +264,6 @@ export default {
         ElMessage.error('导出失败，请稍后重试')
       }
     },
-
-    // 生成 HTML 表格
     generateHTML(taskInfo, rows) {
       const columns = rows.length > 0 ? Object.keys(rows[0]) : []
       let tableHTML = ''
@@ -258,7 +276,6 @@ export default {
       } else {
         tableHTML = '<p>无数据</p>'
       }
-
       return `<!DOCTYPE html>
 <html>
 <head>
@@ -281,14 +298,11 @@ export default {
 </body>
 </html>`
     },
-
-    // 生成 Markdown 表格
     generateMarkdown(taskInfo, rows) {
       let md = `# 任务：${taskInfo.task_name || ''}\n\n`
       md += `- **模板来源**：${taskInfo.template_source || ''}\n`
       md += `- **执行时间**：${taskInfo.executed_at || ''}\n`
       md += `- **数据条数**：${rows.length}\n\n`
-
       if (rows.length > 0) {
         const columns = Object.keys(rows[0])
         md += '| ' + columns.join(' | ') + ' |\n'
@@ -306,7 +320,6 @@ export default {
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 .task-list-page {
   padding: 20px;
   width: 100%;
@@ -364,6 +377,38 @@ export default {
 }
 .op-buttons .el-button {
   margin: 0;
+}
+
+/* 预览结果 Markdown 样式 */
+.markdown-body {
+  padding: 10px;
+  line-height: 1.7;
+}
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.markdown-body :deep(pre) {
+  background: #f5f5f5;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+.markdown-body :deep(th) {
+  background-color: #f2f2f2;
 }
 </style>
 
