@@ -101,25 +101,10 @@
       </el-button>
     </div>
 
-    <!-- 预览弹窗 -->
-    <el-dialog v-model="previewVisible" title="采集预览" width="60%">
-      <div class="preview-content" v-loading="previewLoading">
-        <div class="markdown-preview">
-          <p v-if="previewData.length === 0 && !previewLoading">暂无预览数据</p>
-          <p v-for="(item, idx) in previewData" :key="idx">### {{ item.title }}</p>
-        </div>
-        <el-table :data="previewData" style="margin-top: 20px;">
-          <el-table-column prop="title" label="标题" />
-          <el-table-column prop="url" label="网址" />
-          <el-table-column prop="status" label="状态">
-            <template #default="scope">
-              <el-tag :type="scope.row.status === '成功' ? 'success' : 'danger'">
-                {{ scope.row.status }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+    <!-- 预览弹窗（Markdown 渲染） -->
+    <el-dialog v-model="previewVisible" title="采集预览" width="60%" :close-on-click-modal="false">
+      <div v-if="previewLoading" v-loading="previewLoading" style="min-height: 100px;"></div>
+      <div v-else class="markdown-body" v-html="previewHtml"></div>
       <template #footer>
         <el-button @click="resetConfig">重新配置</el-button>
         <el-button type="primary" @click="continueCollect">继续</el-button>
@@ -130,7 +115,8 @@
 
 <script>
 import { CopyDocument } from '@element-plus/icons-vue'
-import { startTask } from '@/api/tasks'
+import { startTask, getTaskPreview } from '@/api/tasks'
+import { marked } from 'marked'
 
 export default {
   name: 'ConfigPanel',
@@ -171,7 +157,7 @@ def fetch_data(url):
       advancedOpen: false,
       previewVisible: false,
       previewLoading: false,
-      previewData: [],
+      previewHtml: '',   // 替换原来的 previewData
       submitting: false,
       rules: {
         targetUrls: [{ required: true, message: '请输入目标网址', trigger: 'blur' }],
@@ -229,7 +215,6 @@ def fetch_data(url):
       }
       this.submitting = true
       try {
-        // 严格对齐接口文档：POST /api/tasks/start/ 只需6个字段
         const payload = {
           template_id: this.template.id || null,
           task_type: 'preview',
@@ -242,32 +227,48 @@ def fetch_data(url):
         if (res.data.code === 200) {
           this.$message.success('预览采集任务已启动')
           this.previewVisible = true
-          this.fetchPreviewData()
+          // 尝试直接从响应中获取 extracted_data
+          const extracted = res.data.data?.extracted_data || ''
+          if (extracted && typeof extracted === 'string') {
+            this.previewHtml = marked(extracted)
+          } else {
+            // 否则调用预览接口获取（传入 task_id 或 id）
+            const taskId = res.data.data?.task_id || res.data.data?.id
+            if (taskId) {
+              await this.fetchPreviewData(taskId)
+            } else {
+              this.previewHtml = '<p>未获取到任务ID，无法显示预览</p>'
+            }
+          }
         } else {
           this.$message.error(res.data.msg || '启动失败')
         }
       } catch (error) {
         console.error('启动预览采集失败：', error)
-        this.$message.error('启动失败，请稍后重试')
+        this.$message.error('启动失败，显示示例数据')
         this.previewVisible = true
-        this.previewData = [
-          { title: '示例数据', url: 'http://example.com', status: '成功' }
-        ]
+        this.previewHtml = marked('### 示例采集结果\n\n- 标题：示例数据\n- 网址：http://example.com')
       } finally {
         this.submitting = false
       }
     },
-    async fetchPreviewData() {
+    async fetchPreviewData(taskId) {
       this.previewLoading = true
       try {
-        // 此处可调用 getTaskPreview 接口，目前暂用假数据
-        this.previewData = [
-          { title: '课程公告示例', url: 'http://example.com/course', status: '成功' },
-          { title: '新闻示例', url: 'http://example.com/news', status: '失败' }
-        ]
+        const res = await getTaskPreview(taskId, 10) // 后端限制10行
+        if (res.data.code === 200) {
+          const extracted = res.data.data?.extracted_data || ''
+          if (extracted && typeof extracted === 'string') {
+            this.previewHtml = marked(extracted)
+          } else {
+            this.previewHtml = '<p>暂无预览数据</p>'
+          }
+        } else {
+          this.previewHtml = '<p>获取预览失败</p>'
+        }
       } catch (error) {
         console.error('获取预览数据失败：', error)
-        this.previewData = []
+        this.previewHtml = '<p>获取预览失败</p>'
       } finally {
         this.previewLoading = false
       }
@@ -342,12 +343,6 @@ def fetch_data(url):
   text-align: center;
 }
 
-.markdown-preview {
-  background: #f5f5f5;
-  padding: 10px;
-  margin-bottom: 10px;
-}
-
 .editor-box {
   margin-top: 15px;
   border: 1px solid #444;
@@ -403,5 +398,37 @@ def fetch_data(url):
 .dark-select-dropdown .el-select-dropdown__item {
   background-color: #1e1e1e !important;
   color: #fff !important;
+}
+
+/* 新增：Markdown 渲染样式 */
+.markdown-body {
+  padding: 10px;
+  line-height: 1.7;
+}
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.markdown-body :deep(pre) {
+  background: #f5f5f5;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+.markdown-body :deep(th) {
+  background-color: #f2f2f2;
 }
 </style>
