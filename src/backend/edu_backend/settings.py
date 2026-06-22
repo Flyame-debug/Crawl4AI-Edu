@@ -89,6 +89,9 @@ DATABASES = {
         'PASSWORD': '123456', # 安装PG时手动输的密码，改成你自己的
         'HOST': '127.0.0.1',
         'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',  # ← 添加这一行
+        },
     }
 }
 # Password validation

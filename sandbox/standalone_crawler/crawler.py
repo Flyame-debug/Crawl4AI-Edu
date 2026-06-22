@@ -127,6 +127,8 @@ async def crawl(
     task_type: str = "full",
     preview_limit: int = 10,
     user_prompt: str | None = None,
+    task_id: str = None, 
+    
 ) -> Statistics | None:
     """Run a breadth-first crawl.
 
@@ -231,7 +233,7 @@ async def crawl(
                     white_list_patterns=wp, request_delay=rd,
                     config_path=None, api_client=client,
                     task_id=tid, seed_meta=seed,
-                    task_type="full", preview_limit=10,
+                    task_type=task_type, preview_limit=10,
                     user_prompt=seed.get("user_prompt"),
                 )
                 await client.report_task_result(

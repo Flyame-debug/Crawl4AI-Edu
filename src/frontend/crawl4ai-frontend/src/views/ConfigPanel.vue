@@ -131,6 +131,7 @@
 <script>
 import { CopyDocument } from '@element-plus/icons-vue'
 import { startTask } from '@/api/tasks'
+import { generateRules } from '@/api/ai' 
 
 export default {
   name: 'ConfigPanel',
@@ -229,6 +230,33 @@ def fetch_data(url):
       }
       this.submitting = true
       try {
+            // ========== 新增：AI 生成规则 ==========
+    // 如果有提取指令且 AI 开启，调用规则生成接口
+    if (this.aiConfig.enabled && this.aiConfig.prompts.length > 0) {
+      try {
+        // 需要获取页面骨架（从目标网址获取），这里先用占位
+        // 实际应该先抓取页面获取 HTML 骨架
+        const skeleton = await this.fetchHtmlSkeleton(this.config.targetUrls)
+        
+        const ruleRes = await generateRules({
+          user_prompt: this.aiConfig.prompts.join('\n'),
+          html_skeleton: skeleton,
+          ai_model: this.aiConfig.model,
+          ai_api_url: this.aiConfig.endpoint
+        })
+        
+        if (ruleRes.data.code === 200) {
+          // 把生成的规则存入 advancedCode
+          const ruleContent = ruleRes.data.data.rule_content
+          this.advancedCode = ruleContent
+          this.$message.success('AI 规则生成成功')
+        }
+      } catch (ruleError) {
+        console.warn('AI 规则生成失败，使用默认规则:', ruleError)
+        // 不阻塞流程
+      }
+    }
+    // ======================================
         // 严格对齐接口文档：POST /api/tasks/start/ 只需6个字段
         const payload = {
           template_id: this.template.id || null,
@@ -236,7 +264,8 @@ def fetch_data(url):
           user_prompt: this.aiConfig.prompts.join('\n'),
           ai_model: this.aiConfig.model,
           ai_api_url: this.aiConfig.endpoint,
-          ai_api_key: this.aiConfig.apiKey
+          ai_api_key: this.aiConfig.apiKey,
+          generated_rule: this.advancedCode  // ← 把生成的规则传给后端
         }
         const res = await startTask(payload)
         if (res.data.code === 200) {
@@ -257,6 +286,27 @@ def fetch_data(url):
         this.submitting = false
       }
     },
+
+    // 获取目标页面的 HTML 骨架（用于 AI 生成规则）
+async fetchHtmlSkeleton(url) {
+  try {
+    // 方法1：通过后端代理获取页面内容
+    const response = await fetch(`/api/proxy/html?skeleton=true&url=${encodeURIComponent(url)}`)
+    if (response.ok) {
+      const data = await response.json()
+      return data.skeleton || '<div>示例页面结构</div>'
+    }
+  } catch (e) {
+    console.warn('获取页面骨架失败:', e)
+  }
+  
+  // 备用：返回一个简单的骨架
+  return `<div class="teacher-info">
+    <h3 class="name">姓名</h3>
+    <span class="title">职称</span>
+    <span class="email">邮箱</span>
+  </div>`
+},
     async fetchPreviewData() {
       this.previewLoading = true
       try {

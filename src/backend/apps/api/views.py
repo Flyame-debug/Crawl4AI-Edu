@@ -11,6 +11,7 @@ import asyncio
 import secrets
 import logging
 from pathlib import Path
+from functools import wraps
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q, Count
@@ -161,7 +162,6 @@ class SeedURLViewSet(viewsets.ModelViewSet):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
-    """用户登录"""
     username = request.data.get('username')
     password = request.data.get('password')
     
@@ -174,7 +174,13 @@ def login(request):
         user = User.objects.get(username=username)
         
         if check_password(password, user.password):
-            token = hashlib.md5(f"{username}{secrets.token_hex(8)}".encode()).hexdigest()
+            # 生成唯一 Token
+            token = hashlib.md5(f"{username}{secrets.token_hex(16)}".encode()).hexdigest()
+            
+            # 保存到用户记录
+            user.token = token
+            user.save()
+            
             return Response({
                 'code': 200,
                 'msg': 'success',
@@ -192,6 +198,28 @@ def login(request):
             'code': 401, 'msg': '用户不存在', 'data': None
         }, status=401)
 
+def token_required(view_func):
+    """Token 验证装饰器 - 从 Authorization 头提取并验证 Token"""
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        token = None
+        
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+        
+        if not token:
+            return Response({'code': 401, 'msg': '请先登录', 'data': None}, status=401)
+        
+        # 从数据库查找 Token 对应的用户
+        try:
+            user = User.objects.get(token=token)
+            request.user = user
+            return view_func(request, *args, **kwargs)
+        except User.DoesNotExist:
+            return Response({'code': 401, 'msg': 'Token 无效，请重新登录', 'data': None}, status=401)
+    
+    return wrapper
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -255,6 +283,19 @@ def send_email_code(request):
         }
     })
 
+@api_view(['POST'])
+@token_required
+def logout(request):
+    """退出登录 - 清除 Token"""
+    user = request.user
+    user.token = None
+    user.save()
+    
+    return Response({
+        'code': 200,
+        'msg': '退出成功',
+        'data': None
+    })
 
 @api_view(['GET'])
 def get_dashboard_stats(request):
@@ -939,11 +980,10 @@ def template_delete(request, pk):
 
 
 @api_view(['GET'])
+@token_required
 def template_history(request):
     """P1新增：个人中心-历史模板"""
-    if not request.user.is_authenticated:
-        return Response({'code': 401, 'msg': '请先登录', 'data': None}, status=401)
-    
+    # 装饰器已验证，直接使用 request.user
     page = int(request.query_params.get('page', 1))
     page_size = int(request.query_params.get('page_size', 20))
     
@@ -983,6 +1023,7 @@ def start_task(request):
     ai_model = request.data.get('ai_model', 'qwen2:7b')
     ai_api_url = request.data.get('ai_api_url', 'http://127.0.0.1:11434')
     ai_api_key = request.data.get('ai_api_key', '')
+    generated_rule = request.data.get('generated_rule', '')
     
     # 预览任务限制最多10条
     if task_type == 'preview':
@@ -1036,6 +1077,7 @@ def start_task(request):
         template_id=template_id,
         seed_url=seed_url,
         max_depth=config.get('max_depth', 2),
+        generated_rule=generated_rule,  # ← 添加这一行
         status='pending'
     )
     
@@ -1374,7 +1416,9 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             from standalone_crawler.crawler import crawl as run_crawl
         except ImportError as e:
             raise Exception(f"导入爬虫模块失败: {str(e)}")
-        
+        # 创建 API 客户端
+        from standalone_crawler.api_client import APIClient
+        api_client = APIClient(base_url='http://127.0.0.1:8000')
         # 创建事件循环并运行爬虫
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -1387,6 +1431,8 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             allowed_domains=config.get('allowed_domains', []),
             white_list_patterns=config.get('white_list_patterns', []),
             enable_dead_check=config.get('enable_dead_check', False),
+            api_client=api_client,  # ← 添加这一行
+            task_id=task_id,  
         ))
         
         # 定期检查停止信号

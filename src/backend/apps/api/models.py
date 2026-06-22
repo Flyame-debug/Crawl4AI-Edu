@@ -283,6 +283,7 @@ class User(models.Model):
     is_active = models.BooleanField(default=True, verbose_name="是否激活")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+    token = models.CharField(max_length=128, blank=True, null=True)
     
     class Meta:
         db_table = 'users'
