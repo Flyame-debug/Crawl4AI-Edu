@@ -51,8 +51,9 @@ def process_ai_cleaning_task(self, batch_size: int = 20):
     
     功能：
         1. 获取 process_status='raw_converted' 的页面
-        2. 调用AI进行结构化提取
+        2. 调用清洗流水线（AI清洗 → 规则校验 → 降级兜底）
         3. 更新页面状态为 ai_cleaned 或 error
+        4. AI暂时失败时通过Celery重试（指数退避），重试耗尽后降级到规则兜底
     
     参数:
         batch_size: 每次处理的最大数量（默认20）
@@ -61,7 +62,10 @@ def process_ai_cleaning_task(self, batch_size: int = 20):
         logger.info(f'Celery AI清洗任务启动: batch_size={batch_size}')
         
         from apps.api.models import PageSnapshot
-        from apps.api.services.ai_cleaner import ai_clean_and_extract
+        from apps.api.services.cleaning_pipeline import (
+            run_cleaning_pipeline,
+            RetryNeededException,
+        )
         from apps.api.services.snapshot_service import PageSnapshotService
         
         # 获取待清洗页面
@@ -80,59 +84,86 @@ def process_ai_cleaning_task(self, batch_size: int = 20):
         
         for page in pending_pages:
             try:
-                # 调用AI清洗（新方案：用户驱动 + Markdown输出）
-                result = ai_clean_and_extract(
-                    markdown=page.markdown,
-                    user_prompt=page.user_prompt,
-                    page_type_hint=page.page_type
+                # 状态前置检查：防止其他进程并发处理同一页面
+                if page.process_status == 'ai_cleaned':
+                    continue
+
+                # 调用清洗流水线（传入当前重试次数，用于判断是否需要降级）
+                result = run_cleaning_pipeline(
+                    page_snapshot_id=page.id,
+                    retry_count=self.request.retries,
+                    max_retries=self.max_retries,
                 )
-                
-                if result['success']:
-                    # 组装 extracted_data JSON 结构
-                    extracted_data = result['data']
-                    # 更新为AI清洗完成
+
+                if result['action'] == 'completed':
+                    # AI成功（含规则校验修正）或降级兜底成功 → 写入 ai_cleaned
+                    extracted_data = result['extracted_data']
                     PageSnapshotService.update_clean_result(
                         snapshot_id=page.id,
                         extracted_data=extracted_data,
-                        process_status='ai_cleaned'
+                        process_status='ai_cleaned',
                     )
                     success_count += 1
-                    logger.debug(
-                        f'AI清洗成功: {page.url}, '
+                    logger.info(
+                        f'流水线完成: {page.url}, '
+                        f'method={extracted_data.get("method")}, '
                         f'confidence={extracted_data.get("confidence")}'
                     )
-                else:
-                    # 清洗失败
+
+                elif result['action'] == 'retry':
+                    # AI暂时失败，需Celery重试 → 保持页面状态为 raw_converted，抛重试信号
+                    logger.warning(
+                        f'流水线请求重试: {page.url}, '
+                        f'retry={self.request.retries + 1}/{self.max_retries}, '
+                        f'error={result["error"]}'
+                    )
+                    raise RetryNeededException(result['error'])
+
+                else:  # 'error'：硬错误，不重试
                     PageSnapshotService.update_clean_result(
                         snapshot_id=page.id,
                         extracted_data={},
                         process_status='error',
-                        error_info=result.get('error', 'AI清洗失败')
+                        error_info=result['error'][:500],
                     )
                     failed_count += 1
                     logger.warning(
-                        f'AI清洗失败: {page.url}, '
-                        f'error={result.get("error")}'
+                        f'流水线硬错误: {page.url}, error={result["error"]}'
                     )
-                    
+
+            except RetryNeededException:
+                # 重试信号 → 传播到外层，触发 Celery 重试
+                raise
             except Exception as e:
-                logger.error(f'AI清洗异常: {page.url}, error={str(e)}')
+                logger.error(f'流水线异常: {page.url}, error={str(e)}')
                 PageSnapshotService.update_clean_result(
                     snapshot_id=page.id,
                     extracted_data={},
                     process_status='error',
-                    error_info=str(e)
+                    error_info=str(e)[:500],
                 )
                 failed_count += 1
-        
-        logger.info(f'AI清洗任务完成: 处理{len(pending_pages)}条, 成功{success_count}, 失败{failed_count}')
-        
+
+        logger.info(
+            f'AI清洗任务完成: 处理{len(pending_pages)}条, '
+            f'成功{success_count}, 失败{failed_count}'
+        )
+
         return {
             'processed': len(pending_pages),
             'success': success_count,
-            'failed': failed_count
+            'failed': failed_count,
         }
-        
+
+    except RetryNeededException as exc:
+        # 流水线发出的重试信号 → 触发 Celery 指数退避重试
+        countdown = 60 * (2 ** self.request.retries)
+        logger.info(
+            f'触发Celery重试: retry={self.request.retries + 1}/{self.max_retries}, '
+            f'countdown={countdown}s, reason={exc}'
+        )
+        raise self.retry(exc=exc, countdown=countdown)
+
     except Exception as exc:
         logger.error(f'process_ai_cleaning_task 执行异常: {exc}')
         countdown = 60 * (2 ** self.request.retries)
