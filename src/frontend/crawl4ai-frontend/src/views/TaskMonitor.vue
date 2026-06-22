@@ -1,6 +1,6 @@
 <template>
   <div class="task-list-page">
-    <!-- 搜索卡片 -->
+    <!-- 搜索卡片（不变） -->
     <el-card class="search-card" shadow="hover">
       <div class="filters">
         <div class="filter-row">
@@ -38,7 +38,7 @@
       </div>
     </el-card>
 
-    <!-- 任务列表表格 -->
+    <!-- 任务列表表格（不变） -->
     <el-table :data="tasks" class="task-table" empty-text="暂无任务" v-loading="loading">
       <el-table-column prop="task_name" label="任务名称" width="120" />
       <el-table-column prop="template_source" label="模板来源" width="120" />
@@ -63,8 +63,9 @@
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="exportTask(scope.row, 'json')">导出JSON</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'csv')">导出CSV</el-dropdown-item>
+                  <!-- 修改：改为导出 HTML 和 Markdown -->
+                  <el-dropdown-item @click="exportTask(scope.row, 'html')">导出 HTML</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'markdown')">导出 Markdown</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -78,7 +79,8 @@
 <script>
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getTasks, getTaskDetail, startTask, downloadTaskResult } from '@/api/tasks'
+// 注意：不再需要 downloadTaskResult
+import { getTasks, getTaskDetail, startTask } from '@/api/tasks'
 
 export default {
   name: 'TaskMonitor',
@@ -191,27 +193,120 @@ export default {
         }
       }
     },
+
+    // ========== 新的导出逻辑 ==========
     async exportTask(task, format) {
       try {
-        const res = await downloadTaskResult(task.id, format)
-        const blob = new Blob([res.data], { type: format === 'json' ? 'application/json' : 'text/csv' })
+        // 1. 获取任务详情（包含采集到的数据）
+        const res = await getTaskDetail(task.id)
+        if (res.data.code !== 200) {
+          ElMessage.error('获取任务数据失败')
+          return
+        }
+        const taskData = res.data.data
+
+        // 2. 提取数据数组（字段名可能需要根据实际情况调整）
+        const rows = taskData.results || taskData.data_list || []
+        if (!Array.isArray(rows)) {
+          ElMessage.warning('该任务没有可导出的数据')
+          return
+        }
+
+        // 3. 根据格式生成文件内容
+        let content = ''
+        let mimeType = ''
+        let fileExtension = ''
+
+        if (format === 'html') {
+          content = this.generateHTML(taskData, rows)
+          mimeType = 'text/html'
+          fileExtension = 'html'
+        } else if (format === 'markdown') {
+          content = this.generateMarkdown(taskData, rows)
+          mimeType = 'text/markdown'
+          fileExtension = 'md'
+        } else {
+          ElMessage.error('不支持的格式')
+          return
+        }
+
+        // 4. 创建 Blob 并下载（加 BOM 防止中文乱码）
+        const blob = new Blob(['\ufeff' + content], { type: mimeType })
         const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `task_${task.id}.${format}`
-        a.click()
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `task_${task.id}.${fileExtension}`
+        link.click()
         URL.revokeObjectURL(url)
-        ElMessage.success('下载成功')
+        ElMessage.success('导出成功')
       } catch (error) {
         console.error('导出失败：', error)
-        ElMessage.error('导出失败')
+        ElMessage.error('导出失败，请稍后重试')
       }
+    },
+
+    // 生成 HTML 表格
+    generateHTML(taskInfo, rows) {
+      const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+      let tableHTML = ''
+      if (columns.length > 0) {
+        const headerHTML = '<tr>' + columns.map(col => `<th>${col}</th>`).join('') + '</tr>'
+        const bodyHTML = rows.map(row => {
+          return '<tr>' + columns.map(col => `<td>${row[col] ?? ''}</td>`).join('') + '</tr>'
+        }).join('')
+        tableHTML = `<table border="1" cellspacing="0" cellpadding="5">${headerHTML}${bodyHTML}</table>`
+      } else {
+        tableHTML = '<p>无数据</p>'
+      }
+
+      return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>任务导出 - ${taskInfo.task_name || ''}</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 8px; }
+    th { background-color: #f2f2f2; }
+  </style>
+</head>
+<body>
+  <h1>任务：${taskInfo.task_name || ''}</h1>
+  <p><strong>模板来源：</strong>${taskInfo.template_source || ''}</p>
+  <p><strong>执行时间：</strong>${taskInfo.executed_at || ''}</p>
+  <p><strong>数据条数：</strong>${rows.length}</p>
+  <hr>
+  ${tableHTML}
+</body>
+</html>`
+    },
+
+    // 生成 Markdown 表格
+    generateMarkdown(taskInfo, rows) {
+      let md = `# 任务：${taskInfo.task_name || ''}\n\n`
+      md += `- **模板来源**：${taskInfo.template_source || ''}\n`
+      md += `- **执行时间**：${taskInfo.executed_at || ''}\n`
+      md += `- **数据条数**：${rows.length}\n\n`
+
+      if (rows.length > 0) {
+        const columns = Object.keys(rows[0])
+        md += '| ' + columns.join(' | ') + ' |\n'
+        md += '| ' + columns.map(() => '---').join(' | ') + ' |\n'
+        rows.forEach(row => {
+          md += '| ' + columns.map(col => row[col] ?? '').join(' | ') + ' |\n'
+        })
+      } else {
+        md += '无数据\n'
+      }
+      return md
     }
   }
 }
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .task-list-page {
   padding: 20px;
   width: 100%;
