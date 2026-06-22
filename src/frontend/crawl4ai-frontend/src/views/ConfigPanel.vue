@@ -130,8 +130,8 @@
 
 <script>
 import { CopyDocument } from '@element-plus/icons-vue'
-import { startTask } from '@/api/tasks'
 import { generateRules } from '@/api/ai' 
+import { startTask, getTaskPreview } from '@/api/tasks'
 
 export default {
   name: 'ConfigPanel',
@@ -271,7 +271,8 @@ def fetch_data(url):
         if (res.data.code === 200) {
           this.$message.success('预览采集任务已启动')
           this.previewVisible = true
-          this.fetchPreviewData()
+          const taskId = res.data.data.task_id
+          this.fetchPreviewData(taskId)
         } else {
           this.$message.error(res.data.msg || '启动失败')
         }
@@ -307,21 +308,39 @@ async fetchHtmlSkeleton(url) {
     <span class="email">邮箱</span>
   </div>`
 },
-    async fetchPreviewData() {
-      this.previewLoading = true
-      try {
-        // 此处可调用 getTaskPreview 接口，目前暂用假数据
-        this.previewData = [
-          { title: '课程公告示例', url: 'http://example.com/course', status: '成功' },
-          { title: '新闻示例', url: 'http://example.com/news', status: '失败' }
-        ]
-      } catch (error) {
-        console.error('获取预览数据失败：', error)
-        this.previewData = []
-      } finally {
-        this.previewLoading = false
+    async fetchPreviewData(taskId) {
+  this.previewLoading = true
+  try {
+    // 导入 getTaskPreview
+    const { getTaskPreview } = await import('@/api/tasks')
+    const limit = 10
+    const previewRes = await getTaskPreview(taskId, limit)
+    
+    if (previewRes.data.code === 200) {
+      const data = previewRes.data.data
+      const previewList = data.preview || []
+      
+      // 转换为表格显示格式
+      this.previewData = previewList.map(item => ({
+        title: item.name || item.title || item.url || '未命名',
+        url: item.url || '',
+        status: item.extracted_data ? '成功' : '待清洗'
+      }))
+      
+      // 显示总数
+      if (data.total !== undefined) {
+        this.$message.info(`共采集 ${data.total} 条预览数据`)
       }
-    },
+    } else {
+      this.$message.warning('暂无预览数据')
+    }
+  } catch (error) {
+    console.error('获取预览数据失败：', error)
+    this.previewData = []
+  } finally {
+    this.previewLoading = false
+  }
+},
     resetConfig() {
       this.previewVisible = false
       this.$message.info('已返回基础配置')
