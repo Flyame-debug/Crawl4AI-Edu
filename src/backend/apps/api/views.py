@@ -871,7 +871,7 @@ def start_crawl_task_api(request):
     user_prompt = request.data.get('user_prompt', '')
     ai_model = request.data.get('ai_model', 'qwen2:7b')
     ai_api_url = request.data.get('ai_api_url', 'http://127.0.0.1:11434')
-    
+    template_id = request.data.get('template_id', None)  # ✅ 新增
     if not seed_url:
         return Response({'code': 400, 'msg': 'seed_url不能为空', 'data': None}, status=400)
     
@@ -884,11 +884,19 @@ def start_crawl_task_api(request):
                 'msg': '预览任务最多支持10条数据，请删除旧预览任务后重试', 
                 'data': None
             }, status=400)
-    
+    # ✅ 获取模板对象
+    template_obj = None
+    if template_id:
+        try:
+            template_obj = Template.objects.get(pk=template_id)
+        except Template.DoesNotExist:
+            return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
+        
     task = CrawlTask.objects.create(
         seed_url=seed_url,
         max_depth=max_depth,
         task_type=task_type,
+        template=template_obj,  # ✅ 关联模板
         status='pending'
     )
     

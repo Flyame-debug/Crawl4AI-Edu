@@ -46,11 +46,17 @@
         </template>
       </el-table-column>
       
-      <el-table-column prop="template_name" label="模板来源" min-width="120">
-        <template #default="scope">
-          <span>{{ scope.row.template_name || '无模板' }}</span>
-        </template>
-      </el-table-column>
+      <el-table-column label="模板来源" min-width="180">
+  <template #default="scope">
+    <div v-if="scope.row.template_id">
+      <el-tag size="small" type="info" style="margin-right: 4px;">
+        ID: {{ scope.row.template_id }}
+      </el-tag>
+      <span>{{ scope.row.template_name || '未命名模板' }}</span>
+    </div>
+    <span v-else style="color: #c0c4cc; font-size: 12px;">无模板</span>
+  </template>
+</el-table-column>
       
       <el-table-column prop="created_at" label="执行时间" min-width="160">
         <template #default="scope">
