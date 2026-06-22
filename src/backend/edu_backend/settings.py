@@ -89,6 +89,9 @@ DATABASES = {
         'PASSWORD': '123456', # 安装PG时手动输的密码，改成你自己的
         'HOST': '127.0.0.1',
         'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',  # ← 添加这一行
+        },
     }
 }
 # Password validation
@@ -243,5 +246,10 @@ CELERY_BEAT_SCHEDULE = {
     'process-conversion': {
         'task': 'apps.api.tasks.process_conversion_task',
         'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
+    },
+    'monitor-ollama-health': {
+        'task': 'apps.api.tasks.monitor_ollama_health',
+        'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
+        'options': {'queue': 'default'},
     },
 }

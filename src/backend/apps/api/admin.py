@@ -265,21 +265,42 @@ class CrawlTaskAdmin(BaseAdmin):
         ''', percent, obj.success_pages, obj.total_pages or 0)
     pages_progress.short_description = '进度'
     
+    # ✅ 修复 duration 方法 - 处理时区问题
     def duration(self, obj):
-        end_time = obj.completed_at or obj.updated_at
-        if obj.started_at and end_time:
-            delta = end_time - obj.started_at
-            minutes = int(delta.total_seconds() // 60)
-            seconds = int(delta.total_seconds() % 60)
-            return f"{minutes}:{seconds:02d}"
-        if obj.created_at and obj.updated_at:
-            delta = obj.updated_at - obj.created_at
-            minutes = int(delta.total_seconds() // 60)
-            seconds = int(delta.total_seconds() % 60)
-            return f"{minutes}:{seconds:02d}"
-        return '-'
+        """计算任务执行时长"""
+        try:
+            # 确定结束时间
+            end_time = obj.completed_at or obj.updated_at
+            
+            # 如果没有开始时间或结束时间，返回 '-'
+            if not obj.started_at or not end_time:
+                return '-'
+            
+            start = obj.started_at
+            end = end_time
+            
+            # ✅ 确保两个时间都是 offset-aware（有时区）
+            if timezone.is_naive(start):
+                start = timezone.make_aware(start)
+            if timezone.is_naive(end):
+                end = timezone.make_aware(end)
+            
+            # 计算时间差
+            delta = end - start
+            total_seconds = delta.total_seconds()
+            
+            # 如果时间为负数，返回 '-'
+            if total_seconds < 0:
+                return '-'
+            
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+            return f"{minutes:02d}:{seconds:02d}"
+            
+        except Exception as e:
+            # 如果出错，返回 '-'
+            return '-'
     duration.short_description = '耗时'
-
 
 # ==================== 种子URL Admin ====================
 @admin.register(SeedURL)

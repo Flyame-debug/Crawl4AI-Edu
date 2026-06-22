@@ -25,6 +25,7 @@ urlpatterns = [
     path('auth/login/', views.login, name='login'),
     path('auth/register/', views.register, name='register'),
     path('auth/send-code/', views.send_email_code, name='send_email_code'),
+    path('auth/logout/', views.logout, name='logout'),
     
     # ==================== 成员A专用接口 ====================
     # 爬虫配置
@@ -52,6 +53,9 @@ urlpatterns = [
     # ========== P2新增：AI生成采集规则（成员A专属） ==========
     path('ai/generate-rules/', views.generate_rules, name='generate_rules'),
     
+    # ========== 代理接口 ==========
+    path('proxy/html/', views.proxy_html, name='proxy_html'),
+    
     # ==================== 成员B专用接口 ====================
     # ========== P2新增：AI清洗结果上报 ==========
     path('ai/clean-status/', views.update_clean_status, name='update_clean_status'),
@@ -64,6 +68,7 @@ urlpatterns = [
     path('templates/<int:pk>/', views.template_detail, name='template_detail'),
     path('templates/<int:pk>/update/', views.template_update, name='template_update'),
     path('templates/<int:pk>/delete/', views.template_delete, name='template_delete'),
+    path('templates/<int:pk>/save_rule/', views.template_save_rule, name='template_save_rule'),
     # ========== P1新增：历史模板 ==========
     path('templates/history/', views.template_history, name='template_history'),
     

@@ -9,24 +9,18 @@
             type="textarea"
             v-model="config.targetUrls"
             placeholder="支持单行或多行批量导入"
-            rows="3"
+            :rows="3"
           />
         </el-form-item>
-
-        <!-- 页面渲染：只保留开关 -->
         <el-form-item label="页面渲染" prop="renderPage">
           <el-switch v-model="config.renderPage" />
         </el-form-item>
-
         <el-form-item label="等待加载（秒）" prop="waitTime">
           <el-input-number v-model="config.waitTime" :min="0" />
         </el-form-item>
-
         <el-form-item label="缓存开关">
           <el-switch v-model="config.cacheEnabled" active-text="开启" inactive-text="关闭" />
         </el-form-item>
-
-        <!-- 超时时间：开关 + 输入框 -->
         <el-form-item label="超时时间">
           <div class="timeout-row">
             <el-switch v-model="config.timeoutEnabled" />
@@ -61,7 +55,6 @@
         <el-form-item label="API KEY（可选）">
           <el-input v-model="aiConfig.apiKey" />
         </el-form-item>
-        <!-- 多条提取指令 -->
         <el-form-item label="提取指令">
           <div v-for="(cmd, index) in aiConfig.prompts" :key="index" class="prompt-row">
             <el-input v-model="aiConfig.prompts[index]" placeholder="输入指令" />
@@ -96,6 +89,12 @@
 
     <!-- 操作按钮区 -->
     <div class="actions">
+      <!-- AI 规则生成中的提示 -->
+      <div v-if="generating" class="generating-status">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>🤖 AI正在分析网页结构并生成规则...</span>
+        <span class="hint-text">（可能需要30-60秒，请耐心等待）</span>
+      </div>
       <el-button type="primary" @click="previewCollect" :loading="submitting">
         {{ submitting ? '提交中...' : '开始预览采集' }}
       </el-button>
@@ -114,13 +113,14 @@
 </template>
 
 <script>
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, Loading } from '@element-plus/icons-vue'
+import { generateRules } from '@/api/ai'
 import { startTask, getTaskPreview } from '@/api/tasks'
 import { marked } from 'marked'
 
 export default {
   name: 'ConfigPanel',
-  components: { CopyDocument },
+  components: { CopyDocument, Loading },
   props: {
     template: {
       type: Object,
@@ -143,7 +143,7 @@ export default {
         model: 'qwen2:7b',
         endpoint: 'http://localhost:11434',
         apiKey: '',
-        prompts: []
+        prompts: ['提取教师姓名、职称、研究方向、邮箱']
       },
       advancedCode: `# 示例假代码
 import requests
@@ -157,8 +157,10 @@ def fetch_data(url):
       advancedOpen: false,
       previewVisible: false,
       previewLoading: false,
-      previewHtml: '',   // 替换原来的 previewData
+      previewHtml: '',        // Markdown 渲染结果
       submitting: false,
+      generating: false,      // AI 规则生成中
+      _generating: false,     // 防止重复点击
       rules: {
         targetUrls: [{ required: true, message: '请输入目标网址', trigger: 'blur' }],
         renderPage: [{ required: true, message: '请选择页面渲染方式', trigger: 'change' }],
@@ -193,20 +195,170 @@ def fetch_data(url):
       if (tpl.ai_api_url) this.aiConfig.endpoint = tpl.ai_api_url
       if (tpl.ai_api_key) this.aiConfig.apiKey = tpl.ai_api_key
       if (tpl.user_prompt) this.aiConfig.prompts = [tpl.user_prompt]
+      if (tpl.crawler_rule) {
+        this.advancedCode = tpl.crawler_rule
+        console.log('✅ 加载已有规则:', tpl.crawler_rule.substring(0, 100) + '...')
+      }
     },
+
     toggleAdvanced() {
       this.advancedOpen = !this.advancedOpen
     },
+
+    // ===== AI 自动生成规则 =====
+    async autoGenerateScript() {
+      if (this._generating) {
+        console.log('⏸ 正在生成中，请等待...')
+        return
+      }
+      this.generating = true
+      this._generating = true
+      this.$message({
+        message: '🤖 AI正在生成规则，请稍候...',
+        type: 'info',
+        duration: 0
+      })
+      try {
+        const validPrompts = this.aiConfig.prompts.filter(p => p.trim())
+        if (!this.aiConfig.enabled || validPrompts.length === 0) {
+          this.$message.warning('请先开启AI并填写提取指令')
+          return
+        }
+        if (!this.config.targetUrls) {
+          this.$message.warning('请先填写目标网址')
+          return
+        }
+        console.log('🔄 调用 AI 生成脚本...')
+        const skeleton = await this.fetchHtmlSkeleton(this.config.targetUrls)
+        const ruleRes = await generateRules({
+          user_prompt: validPrompts.join('\n'),
+          html_skeleton: skeleton,
+          ai_model: this.aiConfig.model,
+          ai_api_url: this.aiConfig.endpoint,
+          template_id: this.template.id || null
+        })
+        this.$message.closeAll()
+        if (ruleRes.data && ruleRes.data.code === 200) {
+          const ruleContent = ruleRes.data.data.rule_content
+          this.advancedCode = ruleContent
+          this.$emit('rule-generated', ruleContent)
+          if (this.template.id) {
+            await this.saveRuleToTemplate(this.template.id, ruleContent)
+          }
+          this.$message.success('AI 规则生成成功！')
+        } else {
+          this.$message.warning('AI规则生成失败，请检查服务是否运行')
+        }
+      } catch (error) {
+        console.error('❌ AI 规则生成失败:', error)
+        this.$message.error('AI规则生成失败: ' + (error.message || '未知错误'))
+      } finally {
+        this.generating = false
+        this._generating = false
+      }
+    },
+
+    async fetchHtmlSkeleton(url) {
+      try {
+        const apiUrl = '/api/proxy/html/?skeleton=true&url=' + encodeURIComponent(url)
+        const response = await fetch(apiUrl, {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+        })
+        if (response.ok) {
+          const data = await response.json()
+          if (data.data && data.data.skeleton) {
+            return this.extractSkeleton(data.data.skeleton)
+          }
+        }
+      } catch (e) {
+        console.warn('获取页面骨架失败:', e)
+      }
+      return this.getDefaultSkeleton()
+    },
+
+    extractSkeleton(html) {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, 'text/html')
+      function cleanNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          return node.textContent.trim() ? '[text]' : ''
+        }
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const attrs = []
+          if (node.className) attrs.push(`class="${node.className}"`)
+          if (node.id) attrs.push(`id="${node.id}"`)
+          const attrStr = attrs.length ? ' ' + attrs.join(' ') : ''
+          const children = Array.from(node.childNodes).map(cleanNode).filter(Boolean)
+          if (children.length === 0) return `<${node.tagName.toLowerCase()}${attrStr}/>`
+          return `<${node.tagName.toLowerCase()}${attrStr}>${children.join('')}</${node.tagName.toLowerCase()}>`
+        }
+        return ''
+      }
+      return cleanNode(doc.body) || this.getDefaultSkeleton()
+    },
+
+    getDefaultSkeleton() {
+      return `<div class="teacher-info">
+    <h3 class="name">姓名</h3>
+    <span class="title">职称</span>
+    <span class="department">院系</span>
+    <span class="email">邮箱</span>
+    <div class="research">研究方向</div>
+  </div>`
+    },
+
+    generateRule() {
+      console.log('🔄 generateRule 被调用')
+      if (!this.aiConfig.enabled) {
+        this.$message.warning('请先开启AI提取配置')
+        return
+      }
+      if (this.aiConfig.prompts.filter(p => p.trim()).length === 0) {
+        this.$message.warning('请填写至少一条提取指令')
+        return
+      }
+      if (!this.config.targetUrls) {
+        this.$message.warning('请填写目标网址')
+        return
+      }
+      this.autoGenerateScript()
+    },
+
+    async saveRuleToTemplate(templateId, ruleContent) {
+      try {
+        const token = localStorage.getItem('token') || ''
+        const response = await fetch('/api/templates/' + templateId + '/save_rule/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          body: JSON.stringify({ crawler_rule: ruleContent })
+        })
+        const data = await response.json()
+        if (data.code === 200) {
+          console.log('✅ 规则已保存到模板')
+          this.$emit('rule-saved', { templateId, ruleContent })
+        }
+      } catch (error) {
+        console.warn('保存规则到模板失败:', error)
+      }
+    },
+
     copyCode() {
       navigator.clipboard.writeText(this.advancedCode)
       this.$message.success('代码已复制')
     },
+
     addPrompt() {
       this.aiConfig.prompts.push('')
     },
+
     removePrompt(index) {
       this.aiConfig.prompts.splice(index, 1)
     },
+
+    // ===== 预览采集（Markdown 渲染） =====
     async previewCollect() {
       const valid = await this.$refs.configForm.validate().catch(() => false)
       if (!valid) {
@@ -221,18 +373,18 @@ def fetch_data(url):
           user_prompt: this.aiConfig.prompts.join('\n'),
           ai_model: this.aiConfig.model,
           ai_api_url: this.aiConfig.endpoint,
-          ai_api_key: this.aiConfig.apiKey
+          ai_api_key: this.aiConfig.apiKey,
+          generated_rule: this.advancedCode
         }
+        console.log('📤 启动任务请求:', payload)
         const res = await startTask(payload)
         if (res.data.code === 200) {
           this.$message.success('预览采集任务已启动')
           this.previewVisible = true
-          // 尝试直接从响应中获取 extracted_data
           const extracted = res.data.data?.extracted_data || ''
           if (extracted && typeof extracted === 'string') {
             this.previewHtml = marked(extracted)
           } else {
-            // 否则调用预览接口获取（传入 task_id 或 id）
             const taskId = res.data.data?.task_id || res.data.data?.id
             if (taskId) {
               await this.fetchPreviewData(taskId)
@@ -244,7 +396,7 @@ def fetch_data(url):
           this.$message.error(res.data.msg || '启动失败')
         }
       } catch (error) {
-        console.error('启动预览采集失败：', error)
+        console.error('启动预览采集失败:', error)
         this.$message.error('启动失败，显示示例数据')
         this.previewVisible = true
         this.previewHtml = marked('### 示例采集结果\n\n- 标题：示例数据\n- 网址：http://example.com')
@@ -252,10 +404,11 @@ def fetch_data(url):
         this.submitting = false
       }
     },
+
     async fetchPreviewData(taskId) {
       this.previewLoading = true
       try {
-        const res = await getTaskPreview(taskId, 10) // 后端限制10行
+        const res = await getTaskPreview(taskId, 10)
         if (res.data.code === 200) {
           const extracted = res.data.data?.extracted_data || ''
           if (extracted && typeof extracted === 'string') {
@@ -267,16 +420,18 @@ def fetch_data(url):
           this.previewHtml = '<p>获取预览失败</p>'
         }
       } catch (error) {
-        console.error('获取预览数据失败：', error)
+        console.error('获取预览数据失败:', error)
         this.previewHtml = '<p>获取预览失败</p>'
       } finally {
         this.previewLoading = false
       }
     },
+
     resetConfig() {
       this.previewVisible = false
       this.$message.info('已返回基础配置')
     },
+
     continueCollect() {
       this.previewVisible = false
       this.$message.success('继续进行整体爬取工作')
@@ -290,7 +445,6 @@ def fetch_data(url):
 .config-panel {
   padding: 20px;
 }
-
 .section-title {
   font-size: 15px;
   font-weight: 600;
@@ -300,56 +454,47 @@ def fetch_data(url):
   padding-left: 10px;
   margin-bottom: 10px;
 }
-
 .config-card {
   padding: 20px;
   border: 1px solid #eee;
   box-shadow: 0 2px 8px rgba(0,0,0,0.05);
   margin-bottom: 20px;
 }
-
 .form-block {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-
 .switch-row {
   margin-bottom: 0;
 }
-
 .hint {
   font-size: 12px;
   color: #888;
   margin-top: 4px;
   display: block;
 }
-
 .prompt-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
-
 .timeout-row {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .actions {
   margin-top: 20px;
   text-align: center;
 }
-
 .editor-box {
   margin-top: 15px;
   border: 1px solid #444;
   border-radius: 6px;
   overflow: hidden;
 }
-
 .editor-header {
   background: #2d2d2d;
   color: #ccc;
@@ -367,7 +512,6 @@ def fetch_data(url):
   font-size: 14px;
   padding: 0;
 }
-
 .code-editor ::v-deep(.el-textarea__inner) {
   width: 100%;
   height: 300px;
@@ -382,7 +526,6 @@ def fetch_data(url):
   padding: 10px;
   box-shadow: none;
 }
-
 .dark-select ::v-deep(.el-input__inner) {
   background-color: #1e1e1e !important;
   color: #fff !important;
@@ -399,8 +542,28 @@ def fetch_data(url):
   background-color: #1e1e1e !important;
   color: #fff !important;
 }
-
-/* 新增：Markdown 渲染样式 */
+.generating-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  border: 1px solid #b3d8ff;
+  margin-bottom: 16px;
+  color: #409EFF;
+}
+.generating-status .el-icon {
+  font-size: 24px;
+  color: #409EFF;
+}
+.hint-text {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 8px;
+}
+/* Markdown 预览样式 */
 .markdown-body {
   padding: 10px;
   line-height: 1.7;

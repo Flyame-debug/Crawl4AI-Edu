@@ -59,13 +59,13 @@ class TemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Template
         fields = [
-            'id', 'name', 'seed_url', 'tags', 'description',
-            'category', 'category_display',
-            'ai_model', 'ai_api_url', 'ai_api_key', 'user_prompt',
-            'ai_prompt',  # 保留兼容旧版
-            'config', 'usage_count', 'is_public', 'status', 'status_display',
-            'created_by', 'created_by_name',
-            'created_at', 'updated_at'
+            'id', 'name', 'description', 'category', 'category_display',
+            'tags', 'status', 'status_display',
+            'seed_url', 'ai_model', 'ai_api_url', 'ai_api_key',
+            'user_prompt', 'config', 'usage_count', 'created_at',
+            'updated_at', 'created_by', 'created_by_name',  # ✅ 添加 created_by_name
+            'crawler_rule', 'rule_generated_at',
+            'is_public', 'ai_prompt'
         ]
         read_only_fields = ('id', 'usage_count', 'created_at', 'updated_at')
         extra_kwargs = {
@@ -77,12 +77,14 @@ class TemplateListSerializer(serializers.ModelSerializer):
     """模板列表序列化器（精简版）"""
     
     category_display = serializers.CharField(source='get_category_display', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, default=None)
     
     class Meta:
         model = Template
         fields = [
             'id', 'name', 'seed_url', 'tags', 'category', 'category_display',
-            'ai_model', 'user_prompt', 'usage_count', 'created_at'
+            'ai_model', 'user_prompt', 'usage_count', 'created_at',
+            'created_by_name', 'crawler_rule'
         ]
 
 
