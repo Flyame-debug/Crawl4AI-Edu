@@ -22,6 +22,7 @@ from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.db.models import Q
+from apps.api.models import SeedURL
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from .models import (
@@ -1096,6 +1097,7 @@ def template_list(request):
 
 
 @api_view(['POST'])
+@token_required  # ✅ 添加这行
 def template_create(request):
     """新建模板（含新增字段）"""
     name = request.data.get('name')
@@ -1111,6 +1113,7 @@ def template_create(request):
         if len(tag) > 8:
             return Response({'code': 400, 'msg': f'标签"{tag}"超过8个字', 'data': None}, status=400)
     
+    # ✅ 现在 request.user 是真实用户
     template = Template.objects.create(
         name=name,
         seed_url=seed_url,
@@ -1122,7 +1125,7 @@ def template_create(request):
         user_prompt=request.data.get('user_prompt', ''),
         description=request.data.get('description', ''),
         config=request.data.get('config', {}),
-        created_by=request.user if request.user.is_authenticated else None
+        created_by=request.user  # ✅ 直接使用，因为已经验证了
     )
     
     return Response({
@@ -1130,7 +1133,6 @@ def template_create(request):
         'msg': 'success',
         'data': TemplateSerializer(template).data
     }, status=201)
-
 
 # views.py
 @api_view(['GET'])
@@ -1152,6 +1154,7 @@ def template_detail(request, pk):
         }, status=404)
 
 @api_view(['PUT'])
+@token_required  
 def template_update(request, pk):
     """更新模板（含新增字段）"""
     try:
@@ -1638,36 +1641,69 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     import sys
     import os
     from pathlib import Path
-    import logging
     
-    # 设置Django环境
+    # ============================================================
+    # ✅ 关键修复：确保 sandbox 路径在 sys.path 中
+    # ============================================================
     current_file = Path(__file__).resolve()
     BACKEND_ROOT = current_file.parent.parent.parent
-    DJANGO_ROOT = BACKEND_ROOT / "edu_backend"
     PROJECT_ROOT = BACKEND_ROOT.parent.parent
+    sandbox_path = PROJECT_ROOT / "sandbox"
+    sandbox_str = str(sandbox_path)
     
-    for path in [str(PROJECT_ROOT), str(DJANGO_ROOT), str(BACKEND_ROOT)]:
-        if path not in sys.path:
-            sys.path.insert(0, path)
+    # 确保 sandbox 在 sys.path 最前面
+    if sandbox_str in sys.path:
+        sys.path.remove(sandbox_str)
+    sys.path.insert(0, sandbox_str)
     
+    print(f"🔍 sandbox路径: {sandbox_str}")
+    print(f"🔍 sys.path前3项: {sys.path[:3]}")
+    
+    # 验证导入
+    try:
+        import standalone_crawler
+        print("✅ standalone_crawler 导入成功")
+    except ImportError as e:
+        print(f"❌ standalone_crawler 导入失败: {e}")
+    
+    # ============================================================
+    # 设置Django环境
+    # ============================================================
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
     
     import django
     django.setup()
     
     from django.utils import timezone
-    from apps.api.models import CrawlTask
+    from apps.api.models import CrawlTask, SeedURL
     
-    # ✅ 为当前任务创建独立的 logger
+    # 在爬虫启动前自动创建种子
+    seed, created = SeedURL.objects.get_or_create(
+        url=seed_url,
+        defaults={
+            'status': 'pending',
+            'need_render': True,
+            'school': 'default',  # ✅ 添加 school 字段
+            'category': 'other'   # ✅ 添加 category 字段
+        }
+    )
+    if created:
+        print(f"✅ 已自动创建种子: {seed_url}")
+    
+    # ============================================================
+    # 创建任务专属日志
+    # ============================================================
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"🚀 爬虫线程启动: task_id={task_id}")
+    
     task_logger = logging.getLogger(f'crawl_task_{task_id}')
     task_logger.setLevel(logging.DEBUG)
     task_logger.handlers.clear()
     
-    # 创建任务日志目录
     log_dir = Path(__file__).resolve().parent.parent.parent / 'logs' / 'tasks'
     log_dir.mkdir(parents=True, exist_ok=True)
     
-    # ✅ 独立日志文件：logs/tasks/task_{task_id}.log
     log_file = log_dir / f'task_{task_id}.log'
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
@@ -1676,7 +1712,6 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     file_handler.setFormatter(formatter)
     task_logger.addHandler(file_handler)
     
-    # 同时保留控制台输出
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
@@ -1687,20 +1722,23 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     task_logger.info(f"📏 最大深度: {max_depth}")
     task_logger.info(f"⚙️ 配置: {config}")
     
-    # 添加sandbox路径
-    sandbox_path = PROJECT_ROOT / "sandbox"
-    sandbox_str = str(sandbox_path)
-    if sandbox_str in sys.path:
-        sys.path.remove(sandbox_str)
-    sys.path.insert(0, sandbox_str)
-    
+    # ============================================================
     # 注册控制信号
+    # ============================================================
+    from . import TASK_CONTROL_SIGNALS, TASK_CONTROL_LOCK
+    
     with TASK_CONTROL_LOCK:
         TASK_CONTROL_SIGNALS[task_id] = {
             'stop_event': False,
             'pause_event': False,
             'is_stop': False
         }
+    
+    # ============================================================
+    # 执行爬虫
+    # ============================================================
+    import asyncio
+    import threading
     
     try:
         CrawlTask.objects.filter(task_id=task_id).update(
@@ -1709,10 +1747,12 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         )
         task_logger.info(f"✅ 任务状态已更新为 running")
         
-        # 导入爬虫模块
+        # ✅ 导入爬虫模块（路径已修复）
         try:
             from standalone_crawler.crawler import crawl as run_crawl
+            task_logger.info("✅ 爬虫模块导入成功")
         except ImportError as e:
+            task_logger.error(f"❌ 导入爬虫模块失败: {str(e)}")
             raise Exception(f"导入爬虫模块失败: {str(e)}")
         
         # 创建 API 客户端
