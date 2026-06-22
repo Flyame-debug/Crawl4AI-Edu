@@ -1,9 +1,16 @@
 """
 文件名: ai_service.py
 作用: AI服务模块（成员A/B共用Ollama）- V2.0
+主要功能:
+    1. 封装 Ollama /api/generate 生成接口
+    2. 封装 Ollama /api/tags 模型列表查询
+    3. 提供健康检查（连通性 + 模型就绪 + 推理测试）
+    4. 成员A专用：generate_rules() 生成XPath/CSS采集规则
+    5. 成员B专用：clean_and_extract() AI清洗与结构化提取
 """
 
 import json
+import time
 import requests
 import logging
 from typing import Dict, Any, Optional
@@ -23,16 +30,17 @@ class OllamaService:
     
     def generate(self, prompt: str, system_prompt: str = None) -> Dict[str, Any]:
         """
-        调用Ollama生成内容
+        作用: 调用 Ollama /api/generate 生成内容
         
-        Args:
+        参数:
             prompt: 用户提示词
             system_prompt: 系统提示词（可选）
         
-        Returns:
+        返回:
             {
                 "success": True/False,
                 "response": "生成的内容",
+                "model": "模型名称",
                 "error": "错误信息"
             }
         """
@@ -71,6 +79,97 @@ class OllamaService:
         except Exception as e:
             logger.error(f"Ollama 调用失败: {str(e)}")
             return {"success": False, "error": str(e)}
+
+    def check_health(self, test_prompt: str = None) -> Dict[str, Any]:
+        """
+        作用: 检测 Ollama 服务健康状态（API连通性 + 模型可用性 + 推理能力）
+        
+        参数:
+            test_prompt: 推理测试用的提示词（默认: "回复ok"）
+        
+        返回:
+            {
+                "healthy": True/False,
+                "api_reachable": True/False,
+                "model_ready": True/False,
+                "available_models": ["模型名", ...],
+                "inference_test": True/False/None,
+                "inference_time": float,
+                "error": str|None
+            }
+        """
+        result = {
+            "healthy": False,
+            "api_reachable": False,
+            "model_ready": False,
+            "available_models": [],
+            "inference_test": False,
+            "inference_time": 0.0,
+            "error": None,
+        }
+        
+        # 步骤1: 检测 API 连通性 + 获取模型列表
+        models_result = self.list_models()
+        if models_result["success"]:
+            result["api_reachable"] = True
+            result["available_models"] = models_result["models"]
+            
+            # 步骤2: 检查目标模型是否已安装
+            result["model_ready"] = any(
+                self.model in m for m in models_result["models"]
+            )
+        else:
+            result["error"] = models_result.get("error", "无法获取模型列表")
+            logger.error(f"Ollama 健康检查失败（API连通性）: {result['error']}")
+            return result
+        
+        # 步骤3: 轻量推理测试
+        if result["model_ready"]:
+            try:
+                prompt = test_prompt or "回复ok"
+                start = time.time()
+                gen_result = self.generate(prompt)
+                result["inference_time"] = round(time.time() - start, 2)
+                result["inference_test"] = gen_result.get("success", False)
+                if not gen_result.get("success"):
+                    result["error"] = gen_result.get("error", "推理测试失败")
+                    logger.error(f"Ollama 推理测试失败: {result['error']}")
+            except Exception as e:
+                result["error"] = str(e)
+                logger.error(f"Ollama 推理测试异常: {e}")
+        
+        # 综合判断
+        result["healthy"] = result["api_reachable"] and result["model_ready"]
+        return result
+
+    def list_models(self) -> Dict[str, Any]:
+        """
+        作用: 调用 Ollama /api/tags 获取已安装模型列表
+        
+        返回:
+            {"success": True/False, "models": ["模型名", ...], "error": str|None}
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/api/tags",
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            models = [
+                m.get("name", "unknown")
+                for m in data.get("models", [])
+            ]
+            return {"success": True, "models": models, "error": None}
+        except requests.exceptions.Timeout:
+            logger.error(f"获取 Ollama 模型列表超时: {self.api_url}")
+            return {"success": False, "models": [], "error": "获取模型列表超时"}
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Ollama 连接失败: {self.api_url}")
+            return {"success": False, "models": [], "error": "无法连接到Ollama服务"}
+        except Exception as e:
+            logger.error(f"获取 Ollama 模型列表失败: {str(e)}")
+            return {"success": False, "models": [], "error": str(e)}
     
     def generate_rules(self, user_prompt: str, html_skeleton: str) -> Dict[str, Any]:
         """
@@ -163,7 +262,7 @@ class OllamaService:
         
         user_content = f"""请从以下网页内容中提取教师信息：
 
-{markdown[:8000]}
+{markdown[:12000]}
 
 请返回JSON格式的结构化数据："""
         
@@ -171,7 +270,7 @@ class OllamaService:
             user_content = f"""用户指定的提取需求：{user_prompt}
 
 网页内容：
-{markdown[:8000]}
+{markdown[:12000]}
 
 请按照用户需求提取数据："""
         
