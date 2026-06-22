@@ -795,6 +795,8 @@ def report_task_result(request, task_id):
         return Response({'code': 404, 'msg': 'Task not found', 'data': None}, status=404)
 
 
+# 在 views.py 的 generate_rules 接口中添加保存逻辑
+
 @api_view(['POST'])
 def generate_rules(request):
     """P2新增：AI生成采集规则 - 成员A专属"""
@@ -802,6 +804,7 @@ def generate_rules(request):
     ai_api_url = request.data.get('ai_api_url', 'http://127.0.0.1:11434')
     user_prompt = request.data.get('user_prompt', '')
     html_skeleton = request.data.get('html_skeleton', '')
+    template_id = request.data.get('template_id', None)  # 新增：模板ID
     
     if not user_prompt:
         return Response({
@@ -811,13 +814,57 @@ def generate_rules(request):
     ollama = get_ollama_service(api_url=ai_api_url, model=ai_model)
     result = ollama.generate_rules(user_prompt, html_skeleton)
     
+    # 如果提供了 template_id，保存规则到模板
+    if template_id and result.get('rule_content'):
+        try:
+            template = Template.objects.get(pk=template_id)
+            # 添加新字段到模板模型（需要在模型中添加 crawler_rule 字段）
+            template.crawler_rule = result.get('rule_content')
+            template.save()
+        except Template.DoesNotExist:
+            pass
+    
     return Response({
         'code': 200,
         'msg': 'success',
         'data': result
     })
+# 在 views.py 中添加新接口
 
-
+@api_view(['POST'])
+def template_save_rule(request, pk):
+    """保存爬虫规则到模板"""
+    try:
+        template = Template.objects.get(pk=pk)
+        crawler_rule = request.data.get('crawler_rule', '')
+        
+        if crawler_rule:
+            template.crawler_rule = crawler_rule
+            template.rule_generated_at = timezone.now()
+            template.save()
+            
+            return Response({
+                'code': 200,
+                'msg': 'success',
+                'data': {
+                    'template_id': pk,
+                    'crawler_rule': crawler_rule[:100] + '...' if len(crawler_rule) > 100 else crawler_rule,
+                    'rule_generated_at': template.rule_generated_at
+                }
+            })
+        else:
+            return Response({
+                'code': 400,
+                'msg': '规则内容不能为空',
+                'data': None
+            }, status=400)
+            
+    except Template.DoesNotExist:
+        return Response({
+            'code': 404,
+            'msg': '模板不存在',
+            'data': None
+        }, status=404)
 # ==================== 成员B专用接口 ====================
 
 @api_view(['POST'])
@@ -927,19 +974,24 @@ def template_create(request):
     }, status=201)
 
 
+# views.py
 @api_view(['GET'])
 def template_detail(request, pk):
     """获取模板详情（全量字段）"""
     try:
         template = Template.objects.get(pk=pk)
+        serializer = TemplateSerializer(template)
         return Response({
             'code': 200,
             'msg': 'success',
-            'data': TemplateSerializer(template).data
+            'data': serializer.data  # ✅ 确保返回 data 字段
         })
     except Template.DoesNotExist:
-        return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
-
+        return Response({
+            'code': 404, 
+            'msg': '模板不存在', 
+            'data': None
+        }, status=404)
 
 @api_view(['PUT'])
 def template_update(request, pk):
@@ -1483,3 +1535,51 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         with TASK_CONTROL_LOCK:
             TASK_CONTROL_SIGNALS.pop(task_id, None)
 
+@api_view(['GET'])
+def proxy_html(request):
+    """获取页面骨架（供 AI 生成规则使用）"""
+    import requests
+    from bs4 import BeautifulSoup
+    
+    url = request.query_params.get('url')
+    if not url:
+        return Response({'code': 400, 'msg': 'url 不能为空'}, status=400)
+    
+    try:
+        resp = requests.get(url, timeout=10)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # 提取骨架（只保留 class 和 id 属性）
+        def simplify(element, depth=0):
+            if depth > 3:
+                return ''
+            if element.name in ['script', 'style', 'meta', 'link']:
+                return ''
+            result = ''
+            if hasattr(element, 'name') and element.name:
+                attrs = []
+                if element.get('class'):
+                    attrs.append(f"class='{' '.join(element.get('class'))}'")
+                if element.get('id'):
+                    attrs.append(f"id='{element.get('id')}'")
+                attrs_str = ' ' + ' '.join(attrs) if attrs else ''
+                result += f"{'  ' * depth}<{element.name}{attrs_str}>"
+                if element.string and element.string.strip():
+                    result += element.string.strip()
+                for child in element.children:
+                    result += simplify(child, depth + 1)
+                result += f"{'  ' * depth}</{element.name}>"
+            return result
+        
+        skeleton = simplify(soup.body) if soup.body else '<div>示例页面</div>'
+        return Response({
+            'code': 200,
+            'msg': 'success',
+            'data': {'skeleton': skeleton[:3000]}  # 限制长度
+        })
+    except Exception as e:
+        return Response({
+            'code': 500,
+            'msg': str(e),
+            'data': {'skeleton': '<div>示例页面结构</div>'}
+        })

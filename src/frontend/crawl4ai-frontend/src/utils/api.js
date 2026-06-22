@@ -6,7 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
 
 const api = axios.create({
   baseURL: API_BASE_URL,  // 直接指向后端，不加 /api
-  timeout: 30000,  // 超时时间调长一点
+  timeout: 120000,  // 超时时间调长一点
   headers: {
     'Content-Type': 'application/json'
   }

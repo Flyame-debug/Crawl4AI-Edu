@@ -243,7 +243,17 @@ class Template(models.Model):
     ai_api_url = models.URLField(default='http://127.0.0.1:11434', verbose_name="AI服务地址")
     ai_api_key = models.CharField(max_length=200, blank=True, null=True, verbose_name="API密钥")
     user_prompt = models.TextField(blank=True, verbose_name="用户提取指令")
-    
+    crawler_rule = models.TextField(
+        blank=True, 
+        null=True, 
+        default='',
+        verbose_name='爬虫采集规则（XPath/CSS）'
+    )
+    rule_generated_at = models.DateTimeField(
+        blank=True, 
+        null=True,
+        verbose_name='规则生成时间'
+    )
     # 原有字段
     ai_prompt = models.TextField(blank=True, verbose_name="AI提示词（旧，保留兼容）")
     usage_count = models.IntegerField(default=0, verbose_name="使用次数")
