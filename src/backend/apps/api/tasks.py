@@ -61,7 +61,7 @@ def process_ai_cleaning_task(self, batch_size: int = 20):
         logger.info(f'Celery AI清洗任务启动: batch_size={batch_size}')
         
         from apps.api.models import PageSnapshot
-        from apps.api.services.ai_service import get_ollama_service
+        from apps.api.services.ai_cleaner import ai_clean_and_extract
         from apps.api.services.snapshot_service import PageSnapshotService
         
         # 获取待清洗页面
@@ -75,37 +75,45 @@ def process_ai_cleaning_task(self, batch_size: int = 20):
             logger.info('没有待清洗的页面')
             return {'processed': 0, 'success': 0, 'failed': 0}
         
-        ollama = get_ollama_service()
         success_count = 0
         failed_count = 0
         
         for page in pending_pages:
             try:
-                # 调用AI清洗
-                result = ollama.clean_and_extract(
+                # 调用AI清洗（新方案：用户驱动 + Markdown输出）
+                result = ai_clean_and_extract(
                     markdown=page.markdown,
-                    user_prompt=page.user_prompt
+                    user_prompt=page.user_prompt,
+                    page_type_hint=page.page_type
                 )
                 
-                if result['status'] == 'success':
+                if result['success']:
+                    # 组装 extracted_data JSON 结构
+                    extracted_data = result['data']
                     # 更新为AI清洗完成
                     PageSnapshotService.update_clean_result(
                         snapshot_id=page.id,
-                        extracted_data=result.get('structured_data', {}),
+                        extracted_data=extracted_data,
                         process_status='ai_cleaned'
                     )
                     success_count += 1
-                    logger.debug(f'AI清洗成功: {page.url}')
+                    logger.debug(
+                        f'AI清洗成功: {page.url}, '
+                        f'confidence={extracted_data.get("confidence")}'
+                    )
                 else:
                     # 清洗失败
                     PageSnapshotService.update_clean_result(
                         snapshot_id=page.id,
                         extracted_data={},
                         process_status='error',
-                        error_info=result.get('error_msg', 'AI清洗失败')
+                        error_info=result.get('error', 'AI清洗失败')
                     )
                     failed_count += 1
-                    logger.warning(f'AI清洗失败: {page.url}, error={result.get("error_msg")}')
+                    logger.warning(
+                        f'AI清洗失败: {page.url}, '
+                        f'error={result.get("error")}'
+                    )
                     
             except Exception as e:
                 logger.error(f'AI清洗异常: {page.url}, error={str(e)}')
