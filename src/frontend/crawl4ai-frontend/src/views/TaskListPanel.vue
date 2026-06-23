@@ -267,8 +267,14 @@ export default {
     },
     
     viewTask(row) {
-      this.$router.push(`/task/${row.task_id}`)
-    },
+  // 使用 task_id 跳转
+  const taskId = row.task_id || row.id
+  if (taskId) {
+    this.$router.push(`/task/${taskId}`)
+  } else {
+    this.$message.error('任务ID不存在')
+  }
+},
     
     async handleDelete(row) {
       try {

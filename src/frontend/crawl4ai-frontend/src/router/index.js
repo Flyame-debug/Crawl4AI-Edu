@@ -13,7 +13,7 @@ import TemplateManager from '../views/TemplateManager.vue'
 import TemplateCreator from '../views/TemplateCreator.vue'
 import TaskMonitor from '../views/TaskMonitor.vue'
 import TemplateDetail from '../views/TemplateDetail.vue'
-
+import TaskDetail from '@/views/TaskDetail.vue'
 const routes = [
   {
     path: '/',
@@ -64,7 +64,13 @@ const routes = [
         name: 'TaskMonitor',
         component: TaskMonitor,
         meta: { breadcrumb: '任务监控' }
-      }
+      },
+      {
+    path: '/task/:id',
+    name: 'TaskDetail',
+    component: TaskDetail,
+    meta: { requiresAuth: true }
+  }
     ]
   }
 ]
