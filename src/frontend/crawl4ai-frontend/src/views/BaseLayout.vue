@@ -1,16 +1,23 @@
 <!--
   BaseLayout.vue
-  功能：系统总布局，包含粒子背景、左侧导航栏(AppSidebar)、右侧顶栏、面包屑导航、用户信息区和内容区。
-  特点：负责整体框架和页面切换动画，调用 AppSidebar 组件并管理折叠状态。
+  功能：系统总布局，包含淡雅漂浮球体背景、左侧导航栏(AppSidebar)、右侧顶栏、面包屑导航、用户信息区和内容区。
+  特点：侧边栏和顶栏半透明毛玻璃效果浮于背景之上，负责整体框架和页面切换动画。
   新增：引入 AppTour 组件实现新手引导，统一管理引导步骤数据（使用 id 选择器定位）。
 -->
 
 <template>
   <div class="base-layout">
-    <!-- 粒子背景层 -->
-    <canvas id="particle-canvas"></canvas>
+    <!-- 淡雅漂浮球体背景层 -->
+    <div class="bg-spheres">
+      <div class="bg-sphere bg-sphere-1"></div>
+      <div class="bg-sphere bg-sphere-2"></div>
+      <div class="bg-sphere bg-sphere-3"></div>
+      <div class="bg-sphere bg-sphere-4"></div>
+      <div class="bg-sphere bg-sphere-5"></div>
+      <div class="bg-sphere bg-sphere-6"></div>
+    </div>
 
-    <!-- 左侧导航栏（仅用于菜单高亮，不包含引导面板） -->
+    <!-- 左侧导航栏 -->
     <AppSidebar
       :isCollapse="isCollapse"
       :tourActive="tourActive"
@@ -46,7 +53,7 @@
       </div>
     </div>
 
-    <!-- 新手引导组件（遮罩 + 高亮 + 提示卡片） -->
+    <!-- 新手引导组件 -->
     <AppTour
       ref="tour"
       :steps="tourSteps"
@@ -71,7 +78,7 @@ export default {
       // 新手引导状态
       tourActive: false,
       tourStep: 0,
-      // 引导步骤数据（顺序：首页→模板页面→新建模板→任务监控→操作指南→退出登录）
+      // 引导步骤数据
       tourSteps: [
         {
           title: '首页入口',
@@ -114,8 +121,7 @@ export default {
   },
   mounted() {
     this.checkLoginStatus()
-    this.initParticles()
-    window.addEventListener('resize', this.resizeCanvas)
+    window.addEventListener('resize', this.handleResize)
 
     // 首次登录引导
     if (!this.isGuest && !localStorage.getItem('tour_completed')) {
@@ -126,7 +132,7 @@ export default {
     }
   },
   beforeUnmount() {
-    window.removeEventListener('resize', this.resizeCanvas)
+    window.removeEventListener('resize', this.handleResize)
   },
   methods: {
     checkLoginStatus() {
@@ -144,59 +150,9 @@ export default {
     goLogin() {
       this.$router.push('/auth')
     },
-    resizeCanvas() {
-      const canvas = document.getElementById('particle-canvas')
-      if (canvas) {
-        canvas.width = window.innerWidth
-        canvas.height = window.innerHeight
-      }
+    handleResize() {
+      // 窗口大小变化时球体自动适应，无需额外操作
     },
-    initParticles() {
-      const canvas = document.getElementById('particle-canvas')
-      const ctx = canvas.getContext('2d')
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
-
-      const particles = Array.from({ length: 100 }, () => ({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.6,
-        vy: (Math.random() - 0.5) * 0.6,
-        radius: 2,
-      }))
-
-      function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
-        particles.forEach((p) => {
-          ctx.beginPath()
-          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
-          ctx.fillStyle = 'rgba(200,200,255,0.7)'
-          ctx.fill()
-          p.x += p.vx
-          p.y += p.vy
-          if (p.x < 0 || p.x > canvas.width) p.vx *= -1
-          if (p.y < 0 || p.y > canvas.height) p.vy *= -1
-        })
-        for (let i = 0; i < particles.length; i++) {
-          for (let j = i + 1; j < particles.length; j++) {
-            const dx = particles[i].x - particles[j].x
-            const dy = particles[i].y - particles[j].y
-            const dist = Math.sqrt(dx * dx + dy * dy)
-            if (dist < 120) {
-              ctx.beginPath()
-              ctx.strokeStyle = `rgba(180,180,255,${1 - dist / 120})`
-              ctx.moveTo(particles[i].x, particles[i].y)
-              ctx.lineTo(particles[j].x, particles[j].y)
-              ctx.stroke()
-            }
-          }
-        }
-        requestAnimationFrame(draw)
-      }
-      draw()
-    },
-
-    // 引导结束回调
     onTourFinish() {
       this.tourActive = false
       this.tourStep = 0
@@ -213,13 +169,106 @@ export default {
   position: relative;
   overflow: hidden;
 }
-#particle-canvas {
+
+/* ===== 淡雅漂浮球体背景（稍微明显一点） ===== */
+.bg-spheres {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   z-index: 0;
+  pointer-events: none;
+}
+
+.bg-sphere {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(3px);
+  animation: bgFloat linear infinite alternate;
+}
+
+.bg-sphere-1 {
+  width: 140px;
+  height: 140px;
+  top: 8%;
+  left: 5%;
+  background: radial-gradient(circle at 30% 30%, rgba(64,158,255,0.40), rgba(64,158,255,0.05));
+  box-shadow: 0 0 50px rgba(64,158,255,0.35);
+  animation-duration: 22s;
+}
+
+.bg-sphere-2 {
+  width: 100px;
+  height: 100px;
+  top: 65%;
+  left: 85%;
+  background: radial-gradient(circle at 40% 40%, rgba(123,97,255,0.35), rgba(123,97,255,0.05));
+  box-shadow: 0 0 45px rgba(123,97,255,0.30);
+  animation-duration: 26s;
+  animation-delay: -6s;
+}
+
+.bg-sphere-3 {
+  width: 90px;
+  height: 90px;
+  top: 85%;
+  left: 15%;
+  background: radial-gradient(circle at 35% 35%, rgba(64,200,255,0.30), rgba(64,200,255,0.05));
+  box-shadow: 0 0 40px rgba(64,200,255,0.28);
+  animation-duration: 24s;
+  animation-delay: -12s;
+}
+
+.bg-sphere-4 {
+  width: 120px;
+  height: 120px;
+  top: 15%;
+  left: 75%;
+  background: radial-gradient(circle at 40% 40%, rgba(180,130,255,0.30), rgba(180,130,255,0.05));
+  box-shadow: 0 0 50px rgba(180,130,255,0.28);
+  animation-duration: 20s;
+  animation-delay: -4s;
+}
+
+.bg-sphere-5 {
+  width: 80px;
+  height: 80px;
+  top: 40%;
+  left: 25%;
+  background: radial-gradient(circle at 30% 30%, rgba(100,150,255,0.35), rgba(100,150,255,0.05));
+  box-shadow: 0 0 35px rgba(100,150,255,0.30);
+  animation-duration: 28s;
+  animation-delay: -9s;
+}
+
+.bg-sphere-6 {
+  width: 110px;
+  height: 110px;
+  top: 70%;
+  left: 50%;
+  background: radial-gradient(circle at 35% 35%, rgba(64,158,255,0.30), rgba(64,158,255,0.05));
+  box-shadow: 0 0 45px rgba(64,158,255,0.28);
+  animation-duration: 23s;
+  animation-delay: -15s;
+}
+
+@keyframes bgFloat {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translate(20px, -25px) rotate(8deg) scale(1.08);
+  }
+  50% {
+    transform: translate(-12px, -10px) rotate(-3deg) scale(0.94);
+  }
+  75% {
+    transform: translate(25px, 18px) rotate(5deg) scale(1.04);
+  }
+  100% {
+    transform: translate(-8px, 22px) rotate(-2deg) scale(1);
+  }
 }
 
 /* 右侧区域 */
@@ -309,7 +358,6 @@ export default {
   transform: translateY(-10px);
 }
 
-/* 动画效果 */
 @keyframes fadeIn {
   from {
     opacity: 0;
