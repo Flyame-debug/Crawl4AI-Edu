@@ -77,15 +77,16 @@
               🔄 重新执行
             </el-button>
 
-            <!-- ✅ 停止按钮（仅在运行或等待时显示） -->
-            <el-button
-              v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
-              size="small"
-              type="danger"
-              @click="stopRunningTask(scope.row)"
-            >
-              停止
-            </el-button>
+            <!-- 停止按钮 -->
+  <el-button
+    v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
+    size="small"
+    type="danger"
+    @click="stopRunningTask(scope.row)"
+    :loading="stoppingIds.includes(scope.row.task_id)"
+  >
+    停止
+  </el-button>
             
             <!-- ✅ 导出下拉菜单 -->
             <el-dropdown @command="(format) => exportTask(scope.row, format)">
@@ -146,8 +147,10 @@ export default {
         type: '',
         status: '',
         dateRange: [],
-        includePreview: false
+        includePreview: false,
+        
       },
+      stoppingIds:[],
       detailDialogVisible: false,
       detailLoading: false,
       detailHtml: ''
@@ -244,20 +247,32 @@ export default {
     // ✅ 停止任务
     async stopRunningTask(task) {
       const taskId = task.task_id || task.id
+      
+      // ✅ 预览任务特殊提示
+      let message = `确认停止任务【${task.task_name || taskId}】？`
+      if (task.task_type === 'preview') {
+        message += '\n⚠️ 预览任务停止后，已采集的数据会保留。'
+      }
+      
       try {
-        await ElMessageBox.confirm(`确认停止任务【${task.task_name || taskId}】？`, '提示', { type: 'warning' })
+        await this.$confirm(message, '停止确认', { type: 'warning' })
+        
+        this.stoppingIds.push(taskId)
         const res = await stopTask(taskId)
+        
         if (res.data.code === 200) {
-          ElMessage.success('任务已停止')
-          this.fetchTasks()
+          this.$message.success('任务已停止')
+          this.fetchTasks()  // 刷新列表
         } else {
-          ElMessage.error(res.data.msg || '停止失败')
+          this.$message.error(res.data.msg || '停止失败')
         }
       } catch (error) {
         if (error !== 'cancel') {
           console.error('停止任务失败：', error)
-          ElMessage.error('停止失败，请稍后重试')
+          this.$message.error('停止失败：' + (error.message || '未知错误'))
         }
+      } finally {
+        this.stoppingIds = this.stoppingIds.filter(id => id !== taskId)
       }
     },
 

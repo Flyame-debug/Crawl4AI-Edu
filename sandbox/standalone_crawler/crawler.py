@@ -418,6 +418,25 @@ async def _run_bfs_crawl(
     # Map legacy "full" → V2 "formal" for API calls.
     _api_task_type: str = "formal" if task_type == "full" else task_type
 
+    # ============================================================
+    # ✅ 新增：停止信号检查函数
+    # ============================================================
+    def _should_stop() -> bool:
+        """检查任务是否应该停止"""
+        if task_id is None:
+            return False
+        try:
+            # 尝试从 views 导入信号
+            from apps.api.views import TASK_CONTROL_SIGNALS, TASK_CONTROL_LOCK
+            with TASK_CONTROL_LOCK:
+                signal = TASK_CONTROL_SIGNALS.get(task_id, {})
+                return signal.get('is_stop', False)
+        except ImportError:
+            # 如果在独立环境中运行，无法导入 Django 信号
+            return False
+        except Exception:
+            return False
+
     # --- Resolve config -------------------------------------------------------
     cfg: dict[str, Any] = {}
     if config_path is not None:
@@ -512,6 +531,11 @@ async def _run_bfs_crawl(
     _all_page_results: list[dict[str, Any]] = []  # Accumulate for quality report.
 
     for depth in range(_max_depth + 1):
+        # ✅ 每次循环开始前检查停止信号
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，终止爬取 (depth={depth})")
+            break
+
         if not current_level:
             logger.info("No more URLs at depth %d — crawl finished.", depth)
             break
@@ -528,6 +552,13 @@ async def _run_bfs_crawl(
                      depth, len(current_level), _max_concurrent)
 
         async def _worker(url: str) -> dict[str, Any]:
+            # ✅ 在 worker 中也检查停止信号
+            if _should_stop():
+                return {
+                    "success": False, "url": url, "depth": depth,
+                    "links": [], "images": [], "error": "Task stopped by user",
+                    "stopped": True,
+                }
             # Skip already-crawled URLs (resume mode).
             if url in _crawled_set:
                 return {
@@ -557,6 +588,11 @@ async def _run_bfs_crawl(
             *[_worker(u) for u in current_level], return_exceptions=True,
         )
 
+        # ✅ 收集完结果后再次检查停止信号
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，停止处理当前层级结果")
+            break
+
         next_level: list[str] = []
         for result in results:
             if isinstance(result, Exception):
@@ -571,6 +607,11 @@ async def _run_bfs_crawl(
                     "error": str(result),
                 })
                 continue
+
+            # ✅ 如果是停止信号导致的失败，不继续处理
+            if result.get("stopped", False):
+                logger.info("⏹️ 任务被停止，跳过后续结果")
+                break
 
             stats.add_result(result)
             _all_page_results.append(result)
@@ -607,10 +648,20 @@ async def _run_bfs_crawl(
             if _is_preview and _preview_pages_done >= preview_limit:
                 continue
 
+            # ✅ 收集链接前检查停止信号
+            if _should_stop():
+                logger.warning(f"⏹️ 任务 {task_id} 被用户停止，停止收集新链接")
+                break
+
             for link in new_links:
                 if not bloom.contains(link):
                     bloom.add(link)
                     next_level.append(link)
+
+        # ✅ 如果因停止信号跳出，不再继续下一层
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，终止爬取")
+            break
 
         # Preview mode: stop descending if limit already reached.
         if _is_preview and _preview_pages_done >= preview_limit:

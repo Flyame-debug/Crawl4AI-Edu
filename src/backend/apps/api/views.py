@@ -1380,15 +1380,15 @@ def pause_task(request, task_id):
 
 @api_view(['POST'])
 def stop_task(request, task_id):
-    """停止任务"""
+    """停止任务 - 增强版"""
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
-        # ✅ 检查状态
+        # ✅ 允许停止预览任务
         if task.status not in ['running', 'paused', 'pending']:
             return Response({
                 'code': 400, 
-                'msg': f'只有运行中、等待中或暂停的任务可以停止，当前状态: {task.status}', 
+                'msg': f'当前状态 {task.status} 无法停止', 
                 'data': None
             }, status=400)
         
@@ -1397,23 +1397,32 @@ def stop_task(request, task_id):
             if task_id in TASK_CONTROL_SIGNALS:
                 TASK_CONTROL_SIGNALS[task_id]['stop_event'] = True
                 TASK_CONTROL_SIGNALS[task_id]['is_stop'] = True
+                print(f"✅ 停止信号已发送: {task_id}")
+            else:
+                print(f"⚠️ 任务 {task_id} 不在控制信号中，直接更新状态")
         
-        # ✅ 更新状态
+        # ✅ 总是更新数据库状态
         task.status = 'stopped'
         task.save()
         
+        # ✅ 如果是预览任务，清理预览数据限制
+        if task.task_type == 'preview':
+            print(f"📌 预览任务 {task_id} 已停止，预览计数将自动更新")
+        
         return Response({
             'code': 200,
-            'msg': 'success',
-            'data': {'task_id': task_id, 'status': 'stopped'}
+            'msg': '任务已停止',
+            'data': {
+                'task_id': task_id, 
+                'status': 'stopped',
+                'task_type': task.task_type
+            }
         })
+        
     except CrawlTask.DoesNotExist:
-        return Response({
-            'code': 404, 
-            'msg': '任务不存在', 
-            'data': None
-        }, status=404)
+        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
     except Exception as e:
+        print(f"❌ 停止任务异常: {e}")
         return Response({
             'code': 500,
             'msg': f'停止失败: {str(e)}',
