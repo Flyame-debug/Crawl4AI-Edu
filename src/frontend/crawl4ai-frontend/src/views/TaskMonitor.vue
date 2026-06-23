@@ -4,7 +4,6 @@
     <el-card class="search-card" shadow="hover">
       <div class="filters">
         <div class="filter-row">
-          <!-- ✅ 显示预览任务的开关 -->
           <el-checkbox v-model="filters.includePreview" @change="fetchTasks">
             显示预览任务
           </el-checkbox>
@@ -36,7 +35,6 @@
 
     <!-- 任务列表表格 -->
     <el-table :data="displayTasks" class="task-table" empty-text="暂无任务" v-loading="loading">
-      <!-- 任务名称列 -->
       <el-table-column prop="task_name" label="任务名称" min-width="150">
         <template #default="scope">
           <span>
@@ -45,15 +43,11 @@
           </span>
         </template>
       </el-table-column>
-      
-      
-      
       <el-table-column prop="created_at" label="执行时间" min-width="160">
         <template #default="scope">
           <span>{{ formatTime(scope.row.created_at) }}</span>
         </template>
       </el-table-column>
-      
       <el-table-column prop="status" label="状态" min-width="100">
         <template #default="scope">
           <el-tag :type="getStatusType(scope.row.status)">
@@ -61,27 +55,43 @@
           </el-tag>
         </template>
       </el-table-column>
-      
       <el-table-column prop="total_pages" label="数据条数" min-width="100">
         <template #default="scope">
           <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
         </template>
       </el-table-column>
-      
-      <el-table-column label="操作" min-width="280" fixed="right">
+      <el-table-column label="操作" min-width="380" fixed="right">
         <template #default="scope">
           <div class="op-buttons">
             <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
             <el-button size="small" @click="viewLog(scope.row)">日志</el-button>
             <el-button size="small" @click="rerunTask(scope.row)">重新执行</el-button>
+            <!-- ✅ 新增：停止按钮（仅在运行或等待时显示） -->
+            <el-button
+              v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
+              size="small"
+              type="danger"
+              @click="stopRunningTask(scope.row)"
+            >
+              停止
+            </el-button>
             <el-dropdown>
               <el-button size="small" type="primary">
                 导出 <el-icon><ArrowDown /></el-icon>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item @click="exportTask(scope.row, 'json')">导出 JSON</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'csv')">导出 CSV</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'xlsx')">导出 Excel</el-dropdown-item>
                   <el-dropdown-item @click="exportTask(scope.row, 'html')">导出 HTML</el-dropdown-item>
                   <el-dropdown-item @click="exportTask(scope.row, 'markdown')">导出 Markdown</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'txt')">导出 TXT</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'xml')">导出 XML</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'sql')">导出 SQL</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'pdf')">导出 PDF</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'doc')">导出 Word</el-dropdown-item>
+                  <el-dropdown-item @click="exportTask(scope.row, 'rss')">导出 RSS</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -109,9 +119,10 @@
 <script>
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getTasks, getTaskDetail, startTask, getTaskPreview } from '@/api/tasks'
+import { getTasks, getTaskDetail, startTask, stopTask, getTaskPreview } from '@/api/tasks'
 import { getTaskLogs } from '@/api/logs'
 import { marked } from 'marked'
+import * as XLSX from 'xlsx'
 
 export default {
   name: 'TaskMonitor',
@@ -124,9 +135,8 @@ export default {
         type: '',
         status: '',
         dateRange: [],
-        includePreview: false  // 默认不显示预览任务
+        includePreview: false
       },
-      // 预览弹窗相关
       detailDialogVisible: false,
       detailLoading: false,
       detailHtml: ''
@@ -134,9 +144,7 @@ export default {
   },
   computed: {
     displayTasks() {
-      if (this.filters.includePreview) {
-        return this.tasks
-      }
+      if (this.filters.includePreview) return this.tasks
       return this.tasks.filter(task => task.task_type !== 'preview')
     }
   },
@@ -157,8 +165,6 @@ export default {
         params.page = 1
         params.page_size = 50
         const res = await getTasks(params)
-        console.log('📥 任务列表响应:', res)
-        
         if (res.data.code === 200) {
           this.tasks = res.data.data.results || res.data.data || []
         } else {
@@ -175,33 +181,9 @@ export default {
     
     getMockTasks() {
       return [
-        { 
-          id: 1, 
-          task_name: '示例任务A', 
-          template_name: '教师信息模板', 
-          created_at: '2026-06-17T10:00:00', 
-          status: 'completed', 
-          total_pages: 120, 
-          success_pages: 120 
-        },
-        { 
-          id: 2, 
-          task_name: '示例任务B', 
-          template_name: '课程信息模板', 
-          created_at: '2026-06-17T11:30:00', 
-          status: 'running', 
-          total_pages: 50, 
-          success_pages: 45 
-        },
-        { 
-          id: 3, 
-          task_name: '示例任务C', 
-          template_name: '科研成果模板', 
-          created_at: '2026-06-17T12:15:00', 
-          status: 'failed', 
-          total_pages: 10, 
-          success_pages: 0 
-        }
+        { id: 1, task_name: '示例任务A', template_name: '教师信息模板', created_at: '2026-06-17T10:00:00', status: 'completed', total_pages: 120, success_pages: 120 },
+        { id: 2, task_name: '示例任务B', template_name: '课程信息模板', created_at: '2026-06-17T11:30:00', status: 'running', total_pages: 50, success_pages: 45 },
+        { id: 3, task_name: '示例任务C', template_name: '科研成果模板', created_at: '2026-06-17T12:15:00', status: 'failed', total_pages: 10, success_pages: 0 }
       ]
     },
     
@@ -219,16 +201,10 @@ export default {
       try {
         const date = new Date(timeStr)
         return date.toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
         })
-      } catch {
-        return timeStr
-      }
+      } catch { return timeStr }
     },
     
     resetFilters() {
@@ -262,7 +238,26 @@ export default {
       return map[status] || 'info'
     },
     
-    // 查看详情 - Markdown 渲染弹窗
+    // ✅ 新增：停止任务
+    async stopRunningTask(task) {
+      const taskId = task.task_id || task.id
+      try {
+        await ElMessageBox.confirm(`确认停止任务【${task.task_name || taskId}】？`, '提示', { type: 'warning' })
+        const res = await stopTask(taskId)
+        if (res.data.code === 200) {
+          ElMessage.success('任务已停止')
+          this.fetchTasks()
+        } else {
+          ElMessage.error(res.data.msg || '停止失败')
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('停止任务失败：', error)
+          ElMessage.error('停止失败，请稍后重试')
+        }
+      }
+    },
+
     async viewDetail(task) {
       this.detailLoading = true
       this.detailDialogVisible = true
@@ -286,69 +281,29 @@ export default {
       }
     },
     
-    // 查看日志
     async viewLog(task) {
       try {
         const taskId = task.task_id || task.id
-        console.log(`📤 获取任务 ${taskId} 的日志...`)
-        
         const res = await getTaskLogs(taskId, 200)
-        console.log('📥 任务日志响应:', res)
-        
         if (res.data && res.data.code === 200) {
           const logs = res.data.data.logs || []
-          const message = res.data.data.message || ''
-          
           if (logs.length > 0) {
             const logContent = logs.join('\n')
             ElMessageBox.alert(
               `<pre style="max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;line-height:1.6;">${logContent}</pre>`,
               `📋 任务日志 - ${task.task_name || taskId}`,
-              { 
-                dangerouslyUseHTMLString: true, 
-                confirmButtonText: '关闭',
-                customClass: 'task-log-dialog'
-              }
+              { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
             )
             return
-          } else if (message) {
-            ElMessage.info(message)
           }
         }
-        
-        if (task.error_message || task.traceback || task.report) {
-          let logContent = ''
-          if (task.error_message) {
-            logContent += `❌ 错误信息：\n${task.error_message}\n\n`
-          }
-          if (task.traceback) {
-            logContent += `📋 错误堆栈：\n${task.traceback}\n\n`
-          }
-          if (task.report) {
-            logContent += `📊 爬虫报告：\n${task.report}`
-          }
-          
-          ElMessageBox.alert(
-            `<pre style="max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all;">${logContent}</pre>`,
-            `任务日志 - ${task.task_name || task.id}`,
-            { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
-          )
-          return
-        }
-        
         ElMessageBox.alert(
-          `<div style="padding:20px;text-align:center;color:#909399;">
-            <div style="font-size:48px;margin-bottom:16px;">📭</div>
-            <div style="font-size:16px;font-weight:500;">暂无日志</div>
-            <div style="font-size:13px;margin-top:8px;">该任务还没有产生日志</div>
-          </div>`,
+          `<div style="padding:20px;text-align:center;color:#909399;">暂无日志</div>`,
           `📋 任务日志 - ${task.task_name || taskId}`,
           { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
         )
-        
       } catch (error) {
-        console.error('❌ 查看日志失败:', error)
-        ElMessage.error('查看日志失败：' + (error.message || '请稍后重试'))
+        ElMessage.error('查看日志失败')
       }
     },
     
@@ -377,92 +332,199 @@ export default {
       }
     },
   
-    // 导出任务数据
+    // 导出任务数据（扩展多格式）
     async exportTask(task, format) {
       try {
         if (task.task_type === 'preview') {
           ElMessage.warning('预览任务不支持导出')
           return
         }
-        
         const taskId = task.task_id || task.id
         if (!taskId) {
           ElMessage.error('任务ID缺失')
           return
         }
-        
-        console.log('📤 导出任务ID:', taskId)
-        
         const res = await getTaskPreview(taskId, 1000)
-        console.log('📥 预览数据响应:', res)
-        
-        if (!res || !res.data) {
-          ElMessage.error('获取任务数据失败：响应为空')
+        if (!res || !res.data || res.data.code !== 200) {
+          ElMessage.error('获取任务数据失败')
           return
         }
-        
-        if (res.data.code !== 200) {
-          ElMessage.error(res.data.msg || '获取任务数据失败')
-          return
-        }
-        
-        let dataList = []
-        if (res.data.data && res.data.data.preview) {
-          dataList = res.data.data.preview
-        } else if (Array.isArray(res.data.data)) {
-          dataList = res.data.data
-        } else {
-          dataList = []
-        }
-        
-        console.log('📊 数据条数:', dataList.length)
-        
-        if (!dataList || dataList.length === 0) {
+        let dataList = res.data.data?.preview || res.data.data || []
+        if (!Array.isArray(dataList)) dataList = []
+        if (dataList.length === 0) {
           ElMessage.warning('该任务没有可导出的数据')
           return
         }
-        
-        let content = ''
-        let mimeType = ''
-        let fileExtension = ''
-        
-        if (format === 'html') {
-          content = this.generateHTML(task, dataList)
-          mimeType = 'text/html'
-          fileExtension = 'html'
-        } else if (format === 'markdown') {
-          content = this.generateMarkdown(task, dataList)
-          mimeType = 'text/markdown'
-          fileExtension = 'md'
-        } else {
-          ElMessage.error('不支持的格式')
-          return
+
+        const taskInfo = {
+          name: task.task_name || '未命名',
+          template: task.template_name || '',
+          time: this.formatTime(task.created_at),
+          status: this.getStatusText(task.status)
         }
-        
-        const blob = new Blob(['\ufeff' + content], { type: mimeType + ';charset=utf-8' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `task_${taskId}_${new Date().toISOString().slice(0,10)}.${fileExtension}`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+        let content, mime, ext
+        switch (format) {
+          case 'json':
+            content = JSON.stringify(dataList, null, 2)
+            mime = 'application/json'
+            ext = 'json'
+            break
+          case 'csv':
+            content = this.generateCSV(dataList)
+            mime = 'text/csv'
+            ext = 'csv'
+            break
+          case 'xlsx':
+            this.generateExcel(dataList, taskId)
+            return
+          case 'html':
+            content = this.generateHTML(taskInfo, dataList)
+            mime = 'text/html'
+            ext = 'html'
+            break
+          case 'markdown':
+            content = this.generateMarkdown(taskInfo, dataList)
+            mime = 'text/markdown'
+            ext = 'md'
+            break
+          case 'txt':
+            content = this.generateTXT(dataList)
+            mime = 'text/plain'
+            ext = 'txt'
+            break
+          case 'xml':
+            content = this.generateXML(dataList)
+            mime = 'application/xml'
+            ext = 'xml'
+            break
+          case 'sql':
+            content = this.generateSQL(dataList)
+            mime = 'application/sql'
+            ext = 'sql'
+            break
+          case 'pdf':
+            this.generatePDF(taskInfo, dataList)
+            return
+          case 'doc':
+            content = this.generateDOC(taskInfo, dataList)
+            mime = 'application/msword'
+            ext = 'doc'
+            break
+          case 'rss':
+            content = this.generateRSS(dataList)
+            mime = 'application/rss+xml'
+            ext = 'rss'
+            break
+          default:
+            ElMessage.error('不支持的格式')
+            return
+        }
+        this.downloadBlob(content, mime, `task_${taskId}_${new Date().toISOString().slice(0,10)}.${ext}`)
         ElMessage.success('导出成功')
-        
       } catch (error) {
-        console.error('❌ 导出失败:', error)
-        ElMessage.error('导出失败：' + (error.response?.data?.msg || error.message || '请稍后重试'))
+        console.error('导出失败：', error)
+        ElMessage.error('导出失败')
       }
     },
-    
-    generateHTML(taskInfo, dataList) {
-      const columns = dataList.length > 0 ? Object.keys(dataList[0]) : []
-      
+
+    // ====== 新增的生成函数 ======
+    generateCSV(data) {
+      const columns = Object.keys(data[0])
+      let csv = '\ufeff' + columns.join(',') + '\n'
+      data.forEach(row => {
+        csv += columns.map(col => {
+          let val = row[col] ?? ''
+          if (typeof val === 'object') val = JSON.stringify(val)
+          val = String(val).replace(/"/g, '""')
+          return `"${val}"`
+        }).join(',') + '\n'
+      })
+      return csv
+    },
+
+    generateExcel(data, taskId) {
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+      XLSX.writeFile(wb, `task_${taskId}_${new Date().toISOString().slice(0,10)}.xlsx`)
+    },
+
+    generateTXT(data) {
+      return data.map(row => {
+        return Object.entries(row).map(([k, v]) => `${k}: ${v}`).join('\n')
+      }).join('\n\n---\n\n')
+    },
+
+    generateXML(data) {
+      let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<records>\n'
+      data.forEach(row => {
+        xml += '  <record>\n'
+        Object.entries(row).forEach(([k, v]) => {
+          xml += `    <${k}>${v}</${k}>\n`
+        })
+        xml += '  </record>\n'
+      })
+      xml += '</records>'
+      return xml
+    },
+
+    generateSQL(data) {
+      const table = 'exported_data'
+      const cols = Object.keys(data[0])
+      const values = data.map(row => {
+        const vals = cols.map(c => {
+          const v = row[c] ?? ''
+          if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
+          return v
+        }).join(', ')
+        return `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${vals});`
+      }).join('\n')
+      return `-- Task export\n${values}\n`
+    },
+
+    generatePDF(info, data) {
+      const html = this.generateHTML(info, data)
+      const win = window.open('', '_blank', 'width=800,height=600')
+      win.document.write(html)
+      win.document.close()
+      win.focus()
+      win.print()
+    },
+
+    generateDOC(info, data) {
+      return this.generateHTML(info, data) // Word 可以打开 HTML 文件
+    },
+
+    generateRSS(data) {
+      let rss = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n<title>Task Export</title>\n<description>采集数据</description>\n`
+      data.forEach(row => {
+        rss += '  <item>\n'
+        rss += `    <title>${row.title || row.url || 'Item'}</title>\n`
+        rss += `    <description>${JSON.stringify(row)}</description>\n`
+        rss += '  </item>\n'
+      })
+      rss += '</channel>\n</rss>'
+      return rss
+    },
+
+    downloadBlob(content, mime, filename) {
+      const blob = new Blob(['\ufeff' + content], { type: mime + ';charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+
+    // 保留原有的 generateHTML 和 generateMarkdown，只做参数适配
+    generateHTML(info, data) {
+      const columns = data.length > 0 ? Object.keys(data[0]) : []
       let tableHTML = ''
       if (columns.length > 0) {
         const headerHTML = '<tr>' + columns.map(col => `<th>${col}</th>`).join('') + '</tr>'
-        const bodyHTML = dataList.map(row => {
+        const bodyHTML = data.map(row => {
           return '<tr>' + columns.map(col => {
             const value = row[col] ?? ''
             const displayValue = typeof value === 'object' ? JSON.stringify(value) : value
@@ -474,17 +536,15 @@ export default {
           <tbody>${bodyHTML}</tbody>
         </table>`
       } else {
-        tableHTML = `<pre>${JSON.stringify(dataList, null, 2)}</pre>`
+        tableHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`
       }
-      
       return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>任务导出 - ${taskInfo.task_name || '未命名任务'}</title>
+  <title>任务导出 - ${info.name}</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 30px; background: #f5f7fa; }
+    body { font-family: sans-serif; margin: 30px; background: #f5f7fa; }
     .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
     h1 { color: #1a1a2e; border-bottom: 3px solid #409EFF; padding-bottom: 12px; }
     .meta { background: #f0f4f8; padding: 16px 20px; border-radius: 8px; margin: 16px 0 24px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
@@ -501,12 +561,12 @@ export default {
 </head>
 <body>
   <div class="container">
-    <h1>📊 任务：${taskInfo.task_name || '未命名任务'}</h1>
+    <h1>📊 任务：${info.name}</h1>
     <div class="meta">
-      <div class="meta-item"><strong>模板来源：</strong>${taskInfo.template_name || '无模板'}</div>
-      <div class="meta-item"><strong>执行时间：</strong>${this.formatTime(taskInfo.created_at) || '-'}</div>
-      <div class="meta-item"><strong>状态：</strong>${this.getStatusText(taskInfo.status)}</div>
-      <div class="meta-item"><strong>数据条数：</strong><span class="data-count">${dataList.length}</span></div>
+      <div class="meta-item"><strong>模板来源：</strong>${info.template || '无模板'}</div>
+      <div class="meta-item"><strong>执行时间：</strong>${info.time || '-'}</div>
+      <div class="meta-item"><strong>状态：</strong>${info.status}</div>
+      <div class="meta-item"><strong>数据条数：</strong><span class="data-count">${data.length}</span></div>
     </div>
     <hr>
     ${tableHTML}
@@ -516,28 +576,25 @@ export default {
 </html>`
     },
 
-    generateMarkdown(taskInfo, dataList) {
-      const columns = dataList.length > 0 ? Object.keys(dataList[0]) : []
-      
-      let md = `# 📊 任务：${taskInfo.task_name || '未命名任务'}\n\n`
-      md += `- **模板来源**：${taskInfo.template_name || '无模板'}\n`
-      md += `- **执行时间**：${this.formatTime(taskInfo.created_at) || '-'}\n`
-      md += `- **状态**：${this.getStatusText(taskInfo.status)}\n`
-      md += `- **数据条数**：${dataList.length}\n\n`
-
+    generateMarkdown(info, data) {
+      const columns = data.length > 0 ? Object.keys(data[0]) : []
+      let md = `# 📊 任务：${info.name}\n\n`
+      md += `- **模板来源**：${info.template || '无模板'}\n`
+      md += `- **执行时间**：${info.time || '-'}\n`
+      md += `- **状态**：${info.status}\n`
+      md += `- **数据条数**：${data.length}\n\n`
       if (columns.length > 0) {
         md += '| ' + columns.join(' | ') + ' |\n'
         md += '| ' + columns.map(() => '---').join(' | ') + ' |\n'
-        dataList.forEach(row => {
+        data.forEach(row => {
           md += '| ' + columns.map(col => {
             const value = row[col] ?? ''
             return typeof value === 'object' ? JSON.stringify(value) : value
           }).join(' | ') + ' |\n'
         })
       } else {
-        md += '```json\n' + JSON.stringify(dataList, null, 2) + '\n```\n'
+        md += '```json\n' + JSON.stringify(data, null, 2) + '\n```\n'
       }
-      
       md += `\n---\n*导出时间：${new Date().toLocaleString('zh-CN')}*\n`
       return md
     }
@@ -605,8 +662,6 @@ export default {
   width: 120px !important;
   margin-right: 10px;
 }
-
-/* Markdown 预览样式 */
 .markdown-body {
   padding: 10px;
   line-height: 1.7;

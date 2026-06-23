@@ -27,6 +27,11 @@
             <el-input-number v-if="config.timeoutEnabled" v-model="config.timeout" :min="1" />
           </div>
         </el-form-item>
+        <!-- ✅ 新增：保留原始数据 -->
+        <el-form-item label="保留原始数据">
+          <el-switch v-model="config.keepRawData" active-text="是" inactive-text="否" />
+          <span class="hint">开启后，采集结果将同时保留清洗前的原始内容</span>
+        </el-form-item>
       </el-form>
     </el-card>
 
@@ -152,6 +157,7 @@ export default {
         waitTime: 3,
         cacheEnabled: false,
         timeoutEnabled: false,
+        keepRawData: false,      // ✅ 新增
         
         timeout: 30
       },
@@ -224,6 +230,8 @@ def fetch_data(url):
         this.advancedCode = tpl.crawler_rule
         console.log('✅ 加载已有规则:', tpl.crawler_rule.substring(0, 100) + '...')
       }
+      // ✅ 新增：回填保留原始数据
+      if (tpl.keep_raw_data !== undefined) this.config.keepRawData = tpl.keep_raw_data
     },
 
     toggleAdvanced() {
@@ -411,7 +419,8 @@ def fetch_data(url):
           ai_model: this.aiConfig.model,
           ai_api_url: this.aiConfig.endpoint,
           ai_api_key: this.aiConfig.apiKey,
-          generated_rule: this.advancedCode
+          generated_rule: this.advancedCode,
+          keep_raw_data: this.config.keepRawData   // ✅ 新增：传递开关值
         }
 
         console.log('📤 启动任务请求:', JSON.stringify(payload, null, 2))
@@ -745,5 +754,10 @@ def fetch_data(url):
   font-size: 12px;
   color: #c0c4cc;
   margin-top: 8px !important;
+}
+.hint {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 6px;
 }
 </style>
