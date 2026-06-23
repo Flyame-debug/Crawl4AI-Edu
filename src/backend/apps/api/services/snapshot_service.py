@@ -63,48 +63,32 @@ class PageSnapshotService:
         user_prompt: str = None,
         images: list = None
     ) -> dict:
-        """
-        增量保存网页内容 - V2.0
-        
-        V2.0新增参数:
-            raw_html: 原始HTML内容
-            task: 关联的爬虫任务对象
-            task_type: 任务类型（preview/formal）
-            user_prompt: 用户提取指令
-            images: 图片列表
-        
-        返回: {'action': 'created'/'skipped'/'updated', 'obj': PageSnapshot}
-        """
+        """增量保存网页内容 - V2.0"""
         if not markdown:
             markdown = ""
-        
+    
         content_hash = PageSnapshotService.compute_hash(markdown)
-        
-        # 构建查询条件（V2.0：同一任务下URL唯一）
+    
         filter_kwargs = {'url': url}
         if task:
             filter_kwargs['task_id'] = task.task_id
-        
-        # 查找已存在的快照
+    
         existing = PageSnapshot.objects.filter(**filter_kwargs).first()
-        
-        # 如果存在且哈希相同，跳过
+    
         if existing and existing.content_hash == content_hash:
             logger.debug(f"内容无变化，跳过保存: {url}")
             return {'action': 'skipped', 'obj': existing}
-        
-        # 自动判断分类
+    
         if not category:
             category = PageSnapshotService.auto_category_from_url(url)
-        
-        # 预览任务限制：最多10条（在创建时检查）
-        if task_type == 'preview':
-            preview_count = PageSnapshot.objects.filter(task_type='preview').count()
-            if preview_count >= 10:
-                logger.warning(f"预览任务已达上限10条，跳过保存: {url}")
-                return {'action': 'skipped', 'obj': None}
-        
-        # 准备数据
+    
+    # ✅ 去掉预览任务限制（注释掉或删除）
+    # if task_type == 'preview':
+    #     preview_count = PageSnapshot.objects.filter(task_type='preview').count()
+    #     if preview_count >= 10:
+    #         logger.warning(f"预览任务已达上限10条，跳过保存: {url}")
+    #         return {'action': 'skipped', 'obj': None}
+    
         data = {
             'url': url,
             'markdown': markdown,
@@ -112,21 +96,18 @@ class PageSnapshotService:
             'category': category,
             'task_type': task_type,
             'user_prompt': user_prompt,
-            'process_status': 'raw_converted',  # V2.0：爬虫完成后标记为已转Markdown
+            'process_status': 'raw_converted',
             'processed_at': timezone.now(),
         }
-        
-        # 可选字段
+    
         if raw_html:
             data['raw_html'] = raw_html
         if task:
             data['task_id'] = task.task_id
         if images:
             data['images'] = images
-        
-        # 版本控制
+    
         if existing:
-            # 更新现有记录
             data['version'] = existing.version + 1
             for key, value in data.items():
                 setattr(existing, key, value)
@@ -134,13 +115,12 @@ class PageSnapshotService:
             action = 'updated'
             obj = existing
         else:
-            # 创建新记录
             data['version'] = 1
             obj = PageSnapshot.objects.create(**data)
             action = 'created'
-        
+    
         logger.info(f"{action} 页面快照: {url}, 版本: {obj.version}, 任务类型: {task_type}")
-        
+    
         return {'action': action, 'obj': obj}
     
     @staticmethod

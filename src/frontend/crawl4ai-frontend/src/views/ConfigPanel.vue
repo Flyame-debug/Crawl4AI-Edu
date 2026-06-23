@@ -130,12 +130,24 @@
       <!-- 结果展示 -->
       <div v-else class="markdown-body" v-html="previewHtml"></div>
       
-      <template #footer>
-        <el-button @click="handleResetConfig" :loading="stoppingPreview">
-          {{ stoppingPreview ? '正在停止...' : '重新配置' }}
-        </el-button>
-        <el-button type="primary" @click="continueCollect" :disabled="!hasPreviewData">继续</el-button>
-      </template>
+      <!-- 预览弹窗 footer -->
+<template #footer>
+  <!-- 重新配置 -->
+  <el-button @click="handleResetConfig" :loading="stoppingPreview">
+    {{ stoppingPreview ? '正在停止...' : '重新配置' }}
+  </el-button>
+  
+  <!-- ✅ 正式采集（原"继续"按钮） -->
+  <el-button 
+    type="primary" 
+    @click="continueCollect" 
+    :disabled="!hasPreviewData || formalCollecting"
+    :loading="formalCollecting"
+    size="large"
+  >
+    {{ formalCollecting ? '采集中...' : '🚀 正式采集' }}
+  </el-button>
+</template>
     </el-dialog>
   </div>
 </template>
@@ -143,7 +155,7 @@
 <script>
 import { CopyDocument, Loading } from '@element-plus/icons-vue'
 import { generateRules } from '@/api/ai'
-import { startTask, getTaskPreview, stopTask } from '@/api/tasks'
+import { startTask, getTaskPreview, stopTask ,getTasks } from '@/api/tasks'
 import { marked } from 'marked'
 
 export default {
@@ -157,6 +169,7 @@ export default {
   },
   data() {
     return {
+      formalCollecting: false,
       config: {
         targetUrls: '',
         renderPage: true,
@@ -214,6 +227,12 @@ def fetch_data(url):
       deep: true
     }
   },
+  computed: {
+  previewDataCount() {
+    // 从预览数据中统计
+    return this.hasPreviewData ? this.previewData?.length || 0 : 0
+  }
+},
   methods: {
     fillFormFromTemplate(tpl) {
       if (tpl.seed_url) this.config.targetUrls = tpl.seed_url
@@ -450,7 +469,8 @@ def fetch_data(url):
           ai_api_url: this.aiConfig.endpoint,
           ai_api_key: this.aiConfig.apiKey,
           generated_rule: this.advancedCode,
-          keep_raw_data: this.config.keepRawData
+          keep_raw_data: this.config.keepRawData,
+          seed_url: this.config.targetUrls,
         }
 
         console.log('📤 启动任务请求:', JSON.stringify(payload, null, 2))
@@ -481,63 +501,89 @@ def fetch_data(url):
     },
 
     async fetchPreviewData(taskId) {
-      this.previewLoading = true
-      this.hasPreviewData = false
-      this.loadingAttempts = 0
-      this.loadingProgress = 0
-      this.loadingStatus = '⏳ 正在启动爬虫...'
-      this.currentTaskId = taskId
-      
-      const maxAttempts = 30
-      
-      while (this.loadingAttempts < maxAttempts) {
-        // ✅ 如果预览已停止，退出循环
-        if (!this.previewLoading) {
-          console.log('⏹️ 预览已停止，退出轮询')
-          return
-        }
-        
-        this.loadingAttempts++
-        this.loadingProgress = Math.round((this.loadingAttempts / maxAttempts) * 100)
-        this.loadingStatus = `⏳ 正在抓取数据 (${this.loadingAttempts}/${maxAttempts})...`
-        
-        try {
-          const res = await getTaskPreview(taskId, 10)
-          console.log('📥 预览数据响应:', res)
+  this.previewLoading = true
+  this.hasPreviewData = false
+  this.loadingAttempts = 0
+  this.loadingProgress = 0
+  this.loadingStatus = '⏳ 正在启动爬虫...'
+  this.currentTaskId = taskId
+  
+  const maxAttempts = 30
+  const maxPages = 5
+  
+  // ✅ 首次获取到数据后，再等几秒看有没有更多数据
+  let firstDataTime = null
+  const extraWaitSeconds = 3  // 首次拿到数据后再等3秒
+  
+  while (this.loadingAttempts < maxAttempts) {
+    if (!this.previewLoading) {
+      console.log('⏹️ 预览已停止，退出轮询')
+      return
+    }
+    
+    this.loadingAttempts++
+    
+    try {
+      const res = await getTaskPreview(taskId, 10)
+      console.log('📥 预览数据响应:', res)
 
-          if (res.data && res.data.code === 200) {
-            const previewList = res.data.data?.preview || []
-            const total = res.data.data?.total || 0
-            
-            if (previewList.length > 0) {
-              this.previewHtml = this.renderPreviewData(previewList, total)
-              this.hasPreviewData = true
-              this.previewLoading = false
-              this.$message.success(`✅ 已加载 ${previewList.length} 条预览数据`)
-              return
-            }
+      if (res.data && res.data.code === 200) {
+        const previewList = res.data.data?.preview || []
+        const total = res.data.data?.total || 0
+        
+        const currentPages = previewList.length
+        this.loadingProgress = Math.min(Math.round((currentPages / maxPages) * 100), 90)
+        
+        if (currentPages > 0) {
+          this.loadingStatus = `⏳ 已获取 ${currentPages} 条数据...`
+          
+          // ✅ 首次拿到数据，记录时间
+          if (!firstDataTime) {
+            firstDataTime = Date.now()
           }
           
-          this.loadingStatus = `⏳ 正在等待数据生成 (${this.loadingAttempts}/${maxAttempts})...`
-          
-        } catch (error) {
-          console.error('❌ 获取预览数据失败:', error)
-          if (error.message?.includes('stopped') || error.response?.status === 400) {
-            console.log('⏹️ 任务已停止，退出轮询')
+          // ✅ 拿到数据后等 extraWaitSeconds 秒，给爬虫多一点时间
+          const waited = (Date.now() - firstDataTime) / 1000
+          if (waited >= extraWaitSeconds || currentPages >= maxPages) {
+            this.loadingProgress = 100
+            this.loadingStatus = '✅ 采集完成！'
+            await new Promise(resolve => setTimeout(resolve, 300))
+            this.previewHtml = this.renderPreviewData(previewList, total)
+            this.hasPreviewData = true
             this.previewLoading = false
+            this.$message.success(`✅ 已加载 ${previewList.length} 条预览数据`)
             return
           }
-          this.loadingStatus = `⚠️ 获取数据失败，正在重试 (${this.loadingAttempts}/${maxAttempts})...`
+          
+          this.loadingStatus = `⏳ 已获取 ${currentPages} 条，等待更多数据... (${Math.round(extraWaitSeconds - waited)}s)`
+        } else {
+          this.loadingStatus = `⏳ 正在抓取页面 (${this.loadingAttempts}/${maxAttempts})...`
         }
-        
-        await new Promise(resolve => setTimeout(resolve, 2000))
       }
       
-      // 超时
-      this.previewLoading = false
-      this.previewHtml = this.renderTimeoutMessage()
-      this.$message.warning('预览任务超时，请检查后端日志')
-    },
+    } catch (error) {
+      console.error('❌ 获取预览数据失败:', error)
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
+  
+  // 超时兜底：有数据就展示
+  this.previewLoading = false
+  try {
+    const lastRes = await getTaskPreview(taskId, 10)
+    const previewList = lastRes.data?.data?.preview || []
+    if (previewList.length > 0) {
+      this.previewHtml = this.renderPreviewData(previewList, lastRes.data.data?.total || 0)
+      this.hasPreviewData = true
+      this.$message.warning(`⚠️ 仅获取到 ${previewList.length} 条数据`)
+      return
+    }
+  } catch (e) {}
+  
+  this.previewHtml = this.renderTimeoutMessage()
+  this.$message.warning('预览任务超时，请检查后端日志')
+},
 
     renderPreviewData(previewList, total) {
       let html = `### 📊 采集预览 (共 ${total || previewList.length} 条)\n\n`
@@ -634,11 +680,63 @@ def fetch_data(url):
       }
     },
 
-    continueCollect() {
-      this.previewVisible = false
-      this.$message.success('继续进行整体爬取工作')
-      this.$router.push('/tasks')
+    // ✅ 正式采集（原 continueCollect）
+  async continueCollect() {
+    // 检查是否有预览数据
+    if (!this.hasPreviewData) {
+      this.$message.warning('请先完成预览采集')
+      return
     }
+    
+    try {
+      await this.$confirm(
+        '确认启动正式采集？\n将使用当前配置采集所有数据。',
+        '正式采集确认',
+        { type: 'info' }
+      )
+      
+      this.formalCollecting = true
+      this.$message.info('正在启动正式采集任务...')
+      
+      const templateId = this.template?.id || this.$route?.params?.id
+      
+      const payload = {
+        template_id: templateId || null,
+        task_type: 'formal',  // ✅ 正式采集
+        user_prompt: this.aiConfig.prompts.join('\n'),
+        ai_model: this.aiConfig.model,
+        ai_api_url: this.aiConfig.endpoint,
+        ai_api_key: this.aiConfig.apiKey,
+        generated_rule: this.advancedCode,
+        keep_raw_data: this.config.keepRawData,
+        config: {
+          max_depth: 3,
+          max_concurrent: 10
+        }
+      }
+      
+      console.log('📤 正式采集请求:', JSON.stringify(payload, null, 2))
+      
+      const res = await startTask(payload)
+      
+      if (res.data && res.data.code === 200) {
+        this.$message.success('正式采集任务已启动！')
+        this.previewVisible = false
+        
+        // ✅ 跳转到任务监控页面
+        this.$router.push('/tasks')
+      } else {
+        this.$message.error(res.data?.msg || '启动失败')
+      }
+    } catch (error) {
+      if (error !== 'cancel') {
+        console.error('❌ 正式采集启动失败:', error)
+        this.$message.error('启动失败：' + (error.message || '未知错误'))
+      }
+    } finally {
+      this.formalCollecting = false
+    }
+  },
   }
 }
 </script>
@@ -846,5 +944,34 @@ def fetch_data(url):
   font-size: 12px;
   color: #909399;
   margin-left: 6px;
+}
+.preview-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #e4e7ed;
+  margin-bottom: 16px;
+}
+
+.result-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.data-count {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.result-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.no-data-placeholder {
+  padding: 40px 0;
 }
 </style>

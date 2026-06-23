@@ -93,14 +93,14 @@ class PageSnapshotViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 预览任务限制检查
-        if task_type == 'preview':
-            preview_count = PageSnapshot.objects.filter(task_type='preview').count()
-            if preview_count >= 10:
-                return Response(
-                    {'code': 400, 'msg': '预览任务最多支持10条数据', 'data': None},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # ✅ 去掉预览任务限制
+        # if task_type == 'preview':
+        #     preview_count = PageSnapshot.objects.filter(task_type='preview').count()
+        #     if preview_count >= 10:
+        #         return Response(
+        #             {'code': 400, 'msg': '预览任务最多支持10条数据', 'data': None},
+        #             status=status.HTTP_400_BAD_REQUEST
+        #         )
         
         category = request.data.get('category')
         if not category:
@@ -825,6 +825,8 @@ def save_page_snapshot(request):
     task_type = request.data.get('task_type', 'formal')
     user_prompt = request.data.get('user_prompt', '')
     task_id = request.data.get('task_id')
+    raw_html = request.data.get('raw_html')
+    images = request.data.get('images', [])  # ✅ 获取 images
     
     if not url or not markdown:
         return Response({
@@ -848,7 +850,9 @@ def save_page_snapshot(request):
         category=category,
         task=task,
         task_type=task_type,
-        user_prompt=user_prompt
+        user_prompt=user_prompt,
+        raw_html=raw_html,
+        images=images,  
     )
     
     return Response({
@@ -1275,15 +1279,13 @@ def start_task(request):
                 'data': None
             }, status=404)
     
-    # 预览任务限制最多10条
+    # views.py - start_task
+
     if task_type == 'preview':
-        existing_count = PageSnapshot.objects.filter(task_type='preview').count()
-        if existing_count >= 10:
-            return Response({
-                'code': 400, 
-                'msg': '预览任务最多支持10条数据，请删除旧预览任务后重试', 
-                'data': None
-            }, status=400)
+        # ✅ 预览模式限制最多 5 条
+        config = request.data.get('config', {})
+        config['max_pages'] = 5  # 只采集5条
+        config['max_depth'] = 1  # 只爬一层
     
     seed_url = None
     template_name = None
@@ -1584,88 +1586,65 @@ def task_progress_api(request, task_id):
 
 @api_view(['GET'])
 def task_preview_api(request, task_id):
-    """采集数据预览（返回结构化数据 + 原始HTML）"""
     limit = int(request.query_params.get('limit', 10))
     
     try:
-        import uuid
-        try:
-            task_uuid = uuid.UUID(task_id)
-        except ValueError:
-            task_uuid = task_id
+        task = CrawlTask.objects.get(task_id=task_id)
+    except CrawlTask.DoesNotExist:
+        return Response({'code': 404, 'msg': f'任务不存在: {task_id}'}, status=404)
+    
+    # ✅ 先查当前任务的快照
+    pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
+    
+    # ✅ 如果当前任务没有快照，用种子URL去库里找已有的
+    if not pages.exists() and task.seed_url:
+        pages = PageSnapshot.objects.filter(url=task.seed_url).order_by('-created_at')[:limit]
+    
+    # 如果还是没有，尝试模糊匹配（去掉末尾斜杠等差异）
+    if not pages.exists() and task.seed_url:
+        base_url = task.seed_url.rstrip('/')
+        pages = PageSnapshot.objects.filter(url__startswith=base_url).order_by('-created_at')[:limit]
+    
+    # 构建返回数据
+    preview = []
+    raw_html = None
+    markdown_content = None
+    
+    for page in pages:
+        if not raw_html and page.raw_html:
+            raw_html = page.raw_html
+        if not markdown_content and page.markdown:
+            markdown_content = page.markdown
         
-        try:
-            if isinstance(task_uuid, uuid.UUID):
-                task = CrawlTask.objects.get(task_id=task_uuid)
-            else:
-                task = CrawlTask.objects.get(task_id=task_id)
-        except CrawlTask.DoesNotExist:
-            return Response({
-                'code': 404,
-                'msg': f'任务不存在: {task_id}',
-                'data': None
-            }, status=404)
-        
-        # 查询关联的页面快照
-        pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
-        
-        preview = []
-        raw_html = None  # ✅ 新增：存储原始HTML
-        markdown_content = None  # ✅ 新增：存储Markdown
-        
-        for page in pages:
-            # ✅ 保存原始HTML（取第一条记录的）
-            if not raw_html and page.raw_html:
-                raw_html = page.raw_html
-            if not markdown_content and page.markdown:
-                markdown_content = page.markdown
-            
-            if page.extracted_data:
-                preview.append({
-                    'url': page.url,
-                    'category': page.category,
-                    'extracted_data': page.extracted_data,
-                    'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
-                })
-            else:
-                preview.append({
-                    'url': page.url,
-                    'category': page.category,
-                    'markdown_preview': page.markdown[:500] if page.markdown else '',
-                    'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
-                })
-        
-        total = PageSnapshot.objects.filter(task=task).count()
-        
-        return Response({
-            'code': 200,
-            'msg': 'success',
-            'data': {
-                'total': total,
-                'preview': preview,
-                'raw_html': raw_html,  # ✅ 新增：返回原始HTML
-                'markdown': markdown_content,  # ✅ 新增：返回Markdown
-                'has_raw': bool(raw_html),  # ✅ 新增：标记是否有原始数据
-                'has_markdown': bool(markdown_content)  # ✅ 新增：标记是否有Markdown
-            }
-        })
-        
-    except Exception as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"❌ task_preview_api 错误: {error_detail}")
-        return Response({
-            'code': 500,
-            'msg': f'获取预览数据失败: {str(e)}',
-            'data': {
-                'total': 0,
-                'preview': [],
-                'raw_html': None,
-                'markdown': None,
-                'has_raw': False,
-                'has_markdown': False
-            }
-        }, status=500)
+        if page.extracted_data:
+            preview.append({
+                'url': page.url,
+                'category': page.category,
+                'extracted_data': page.extracted_data,
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+        else:
+            preview.append({
+                'url': page.url,
+                'category': page.category,
+                'markdown_preview': page.markdown[:500] if page.markdown else '',
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+    
+    total = pages.count()
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'total': total,
+            'preview': preview,
+            'raw_html': raw_html,
+            'markdown': markdown_content,
+            'has_raw': bool(raw_html),
+            'has_markdown': bool(markdown_content)
+        }
+    })
 
 @api_view(['GET'])
 def task_download_api(request, task_id):
@@ -1729,60 +1708,11 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     from pathlib import Path
     
     # ============================================================
-    # ✅ 关键修复：确保 sandbox 路径在 sys.path 中
-    # ============================================================
-    current_file = Path(__file__).resolve()
-    BACKEND_ROOT = current_file.parent.parent.parent
-    PROJECT_ROOT = BACKEND_ROOT.parent.parent
-    sandbox_path = PROJECT_ROOT / "sandbox"
-    sandbox_str = str(sandbox_path)
-    
-    # 确保 sandbox 在 sys.path 最前面
-    if sandbox_str in sys.path:
-        sys.path.remove(sandbox_str)
-    sys.path.insert(0, sandbox_str)
-    
-    print(f"🔍 sandbox路径: {sandbox_str}")
-    print(f"🔍 sys.path前3项: {sys.path[:3]}")
-    
-    # 验证导入
-    try:
-        import standalone_crawler
-        print("✅ standalone_crawler 导入成功")
-    except ImportError as e:
-        print(f"❌ standalone_crawler 导入失败: {e}")
-    
-    # ============================================================
-    # 设置Django环境
-    # ============================================================
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
-    
-    import django
-    django.setup()
-    
-    from django.utils import timezone
-    from apps.api.models import CrawlTask, SeedURL
-    
-    # 在爬虫启动前自动创建种子
-    seed, created = SeedURL.objects.get_or_create(
-        url=seed_url,
-        defaults={
-            'status': 'pending',
-            'need_render': True,
-            'school': 'default',  # ✅ 添加 school 字段
-            'category': 'other'   # ✅ 添加 category 字段
-        }
-    )
-    if created:
-        print(f"✅ 已自动创建种子: {seed_url}")
-    
-    # ============================================================
-    # 创建任务专属日志
+    # ✅ 第1步：先创建日志（必须最早）
     # ============================================================
     import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"🚀 爬虫线程启动: task_id={task_id}")
     
+    # 创建任务专属日志
     task_logger = logging.getLogger(f'crawl_task_{task_id}')
     task_logger.setLevel(logging.DEBUG)
     task_logger.handlers.clear()
@@ -1809,9 +1739,68 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     task_logger.info(f"⚙️ 配置: {config}")
     
     # ============================================================
+    # ✅ 第2步：路径设置
+    # ============================================================
+    current_file = Path(__file__).resolve()
+    BACKEND_ROOT = current_file.parent.parent.parent
+    PROJECT_ROOT = BACKEND_ROOT.parent.parent
+    sandbox_path = PROJECT_ROOT / "sandbox"
+    sandbox_str = str(sandbox_path)
+    
+    if sandbox_str in sys.path:
+        sys.path.remove(sandbox_str)
+    sys.path.insert(0, sandbox_str)
+    
+    task_logger.info(f"🔍 sandbox路径: {sandbox_str}")
+    
+    try:
+        import standalone_crawler
+        task_logger.info("✅ standalone_crawler 导入成功")
+    except ImportError as e:
+        task_logger.error(f"❌ standalone_crawler 导入失败: {e}")
+    
+    # ============================================================
+    # 设置Django环境
+    # ============================================================
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
+    
+    import django
+    django.setup()
+    
+    from django.utils import timezone
+    from apps.api.models import CrawlTask, SeedURL
+    
+    # ============================================================
+    # ✅ 第3步：获取任务信息
+    # ============================================================
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        is_preview = (task.task_type == 'preview')
+    except:
+        is_preview = False
+    
+    max_pages = 5 if is_preview else None  # ✅ 改成 None，不是 config.get()
+    actual_depth = 1 if is_preview else max_depth
+    
+    task_logger.info(f"📊 任务类型: {'预览(最多%d页)' % max_pages if is_preview else '正式'}")
+    task_logger.info(f"📏 爬取深度: {actual_depth}")
+    
+    # 自动创建种子
+    seed, created = SeedURL.objects.get_or_create(
+        url=seed_url,
+        defaults={
+            'status': 'pending',
+            'need_render': True,
+            'school': 'default',
+            'category': 'other'
+        }
+    )
+    if created:
+        task_logger.info(f"✅ 已自动创建种子: {seed_url}")
+    
+    # ============================================================
     # 注册控制信号
     # ============================================================
-    
     with TASK_CONTROL_LOCK:
         TASK_CONTROL_SIGNALS[task_id] = {
             'stop_event': False,
@@ -1832,7 +1821,6 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         )
         task_logger.info(f"✅ 任务状态已更新为 running")
         
-        # ✅ 导入爬虫模块（路径已修复）
         try:
             from standalone_crawler.crawler import crawl as run_crawl
             task_logger.info("✅ 爬虫模块导入成功")
@@ -1840,11 +1828,9 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             task_logger.error(f"❌ 导入爬虫模块失败: {str(e)}")
             raise Exception(f"导入爬虫模块失败: {str(e)}")
         
-        # 创建 API 客户端
         from standalone_crawler.api_client import APIClient
         api_client = APIClient(base_url='http://127.0.0.1:8000')
         
-        # 创建事件循环并运行爬虫
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -1852,14 +1838,17 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         
         crawl_task = loop.create_task(run_crawl(
             seed_url=seed_url,
-            max_depth=max_depth,
+            max_depth=actual_depth,
+            max_pages=max_pages,
             max_concurrent=config.get('max_concurrent', 5),
             request_delay=config.get('request_delay', 1.0),
-            allowed_domains=config.get('allowed_domains', []),
+            allowed_domains=config.get('default_allowed_domains', 
+                                     config.get('allowed_domains', [])),
             white_list_patterns=config.get('white_list_patterns', []),
-            enable_dead_check=config.get('enable_dead_check', False),
+            enable_dead_check=False,
             api_client=api_client,
             task_id=task_id,
+            task_type='preview' if is_preview else 'formal',
         ))
         
         # 定期检查停止信号
