@@ -27,7 +27,6 @@
             <el-input-number v-if="config.timeoutEnabled" v-model="config.timeout" :min="1" />
           </div>
         </el-form-item>
-        <!-- ✅ 新增：保留原始数据 -->
         <el-form-item label="保留原始数据">
           <el-switch v-model="config.keepRawData" active-text="是" inactive-text="否" />
           <span class="hint">开启后，采集结果将同时保留清洗前的原始内容</span>
@@ -105,39 +104,46 @@
     </div>
 
     <!-- 预览弹窗 -->
-    <!-- 预览弹窗 -->
-<el-dialog v-model="previewVisible" title="采集预览" width="60%" :close-on-click-modal="false">
-  <!-- ✅ 加载等待界面 -->
-  <div v-if="previewLoading" class="preview-loading">
-    <div class="loading-spinner">
-      <el-icon class="is-loading" size="32"><Loading /></el-icon>
-    </div>
-    <div class="loading-text">
-      <h3>🤖 正在执行预览采集</h3>
-      <p>{{ loadingStatus }}</p>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+    <el-dialog 
+      v-model="previewVisible" 
+      title="采集预览" 
+      width="60%" 
+      :close-on-click-modal="false"
+      @close="handleDialogClose"
+    >
+      <!-- 加载等待界面 -->
+      <div v-if="previewLoading" class="preview-loading">
+        <div class="loading-spinner">
+          <el-icon class="is-loading" size="32"><Loading /></el-icon>
+        </div>
+        <div class="loading-text">
+          <h3>🤖 正在执行预览采集</h3>
+          <p>{{ loadingStatus }}</p>
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+          </div>
+          <p class="progress-text">{{ loadingProgress }}% ({{ loadingAttempts }}/30)</p>
+          <p class="hint-text">⏳ 正在抓取页面内容，请耐心等待...</p>
+        </div>
       </div>
-      <p class="progress-text">{{ loadingProgress }}% ({{ loadingAttempts }}/30)</p>
-      <p class="hint-text">⏳ 正在抓取页面内容，请耐心等待...</p>
-    </div>
-  </div>
-  
-  <!-- ✅ 结果展示 -->
-  <div v-else class="markdown-body" v-html="previewHtml"></div>
-  
-  <template #footer>
-    <el-button @click="resetConfig">重新配置</el-button>
-    <el-button type="primary" @click="continueCollect" :disabled="!hasPreviewData">继续</el-button>
-  </template>
-</el-dialog>
+      
+      <!-- 结果展示 -->
+      <div v-else class="markdown-body" v-html="previewHtml"></div>
+      
+      <template #footer>
+        <el-button @click="handleResetConfig" :loading="stoppingPreview">
+          {{ stoppingPreview ? '正在停止...' : '重新配置' }}
+        </el-button>
+        <el-button type="primary" @click="continueCollect" :disabled="!hasPreviewData">继续</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import { CopyDocument, Loading } from '@element-plus/icons-vue'
 import { generateRules } from '@/api/ai'
-import { startTask, getTaskPreview } from '@/api/tasks'
+import { startTask, getTaskPreview, stopTask } from '@/api/tasks'
 import { marked } from 'marked'
 
 export default {
@@ -157,8 +163,7 @@ export default {
         waitTime: 3,
         cacheEnabled: false,
         timeoutEnabled: false,
-        keepRawData: false,      // ✅ 新增
-        
+        keepRawData: false,
         timeout: 30
       },
       aiConfig: {
@@ -169,14 +174,7 @@ export default {
         apiKey: '',
         prompts: ['提取教师姓名、职称、研究方向、邮箱']
       },
-      advancedCode: `# 示例假代码
-      previewLoading: false,
-      previewHtml: '',
-      loadingStatus: '⏳ 正在启动爬虫...',
-      loadingProgress: 0,
-      loadingAttempts: 0,
-      hasPreviewData: false
-
+      advancedCode: `# 示例代码
 import requests
 
 def fetch_data(url):
@@ -192,6 +190,12 @@ def fetch_data(url):
       submitting: false,
       generating: false,
       _generating: false,
+      stoppingPreview: false,
+      currentTaskId: null,
+      loadingStatus: '⏳ 正在启动爬虫...',
+      loadingProgress: 0,
+      loadingAttempts: 0,
+      hasPreviewData: false,
       rules: {
         targetUrls: [{ required: true, message: '请输入目标网址', trigger: 'blur' }],
         renderPage: [{ required: true, message: '请选择页面渲染方式', trigger: 'change' }],
@@ -230,7 +234,6 @@ def fetch_data(url):
         this.advancedCode = tpl.crawler_rule
         console.log('✅ 加载已有规则:', tpl.crawler_rule.substring(0, 100) + '...')
       }
-      // ✅ 新增：回填保留原始数据
       if (tpl.keep_raw_data !== undefined) this.config.keepRawData = tpl.keep_raw_data
     },
 
@@ -396,16 +399,43 @@ def fetch_data(url):
 
     // ===== 预览采集 =====
     async previewCollect() {
-      console.log('🔍 ===== ConfigPanel 调试信息 =====')
-      console.log('🔍 this.template:', this.template)
-      console.log('🔍 this.template.id:', this.template?.id)
-      console.log('🔍 ================================')
+  // ✅ 检查是否有正在运行的预览任务
+  const valid = await this.$refs.configForm.validate().catch(() => false)
+  if (!valid) {
+    this.$message.error('请填写所有必填项')
+    return
+  }
 
-      const valid = await this.$refs.configForm.validate().catch(() => false)
-      if (!valid) {
-        this.$message.error('请填写所有必填项')
-        return
+  // ✅ 先检查是否有正在运行的预览任务
+  try {
+    const res = await getTasks({ task_type: 'preview', status: 'running', include_preview: 'true' })
+    if (res.data.code === 200) {
+      const runningTasks = res.data.data.results || []
+      if (runningTasks.length > 0) {
+        await this.$confirm(
+          `检测到 ${runningTasks.length} 个预览任务正在运行，是否先停止它们再重新开始？`,
+          '预览任务冲突',
+          { 
+            type: 'warning',
+            confirmButtonText: '停止并重新开始',
+            cancelButtonText: '取消'
+          }
+        )
+        // 停止所有运行中的预览任务
+        for (const task of runningTasks) {
+          await stopTask(task.task_id)
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000)) // 等待停止完成
+        this.$message.success('已停止所有预览任务')
       }
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('检查预览任务失败:', error)
+    } else {
+      return // 用户取消
+    }
+  }
 
       this.submitting = true
       try {
@@ -420,7 +450,7 @@ def fetch_data(url):
           ai_api_url: this.aiConfig.endpoint,
           ai_api_key: this.aiConfig.apiKey,
           generated_rule: this.advancedCode,
-          keep_raw_data: this.config.keepRawData   // ✅ 新增：传递开关值
+          keep_raw_data: this.config.keepRawData
         }
 
         console.log('📤 启动任务请求:', JSON.stringify(payload, null, 2))
@@ -430,6 +460,7 @@ def fetch_data(url):
           this.$message.success('预览采集任务已启动')
           this.previewVisible = true
           const taskId = res.data.data?.task_id || res.data.data?.id
+          this.currentTaskId = taskId
 
           if (taskId) {
             await this.fetchPreviewData(taskId)
@@ -450,101 +481,157 @@ def fetch_data(url):
     },
 
     async fetchPreviewData(taskId) {
-  this.previewLoading = true
-  this.hasPreviewData = false
-  this.loadingAttempts = 0
-  this.loadingProgress = 0
-  this.loadingStatus = '⏳ 正在启动爬虫...'
-  
-  const maxAttempts = 30
-  
-  while (this.loadingAttempts < maxAttempts) {
-    this.loadingAttempts++
-    this.loadingProgress = Math.round((this.loadingAttempts / maxAttempts) * 100)
-    this.loadingStatus = `⏳ 正在抓取数据 (${this.loadingAttempts}/${maxAttempts})...`
-    
-    try {
-      const res = await getTaskPreview(taskId, 10)
-      console.log('📥 预览数据响应:', res)
-
-      if (res.data && res.data.code === 200) {
-        const previewList = res.data.data?.preview || []
-        const total = res.data.data?.total || 0
-        
-        if (previewList.length > 0) {
-          // ✅ 有数据，渲染显示
-          this.previewHtml = this.renderPreviewData(previewList, total)
-          this.hasPreviewData = true
-          this.previewLoading = false
-          this.$message.success(`✅ 已加载 ${previewList.length} 条预览数据`)
+      this.previewLoading = true
+      this.hasPreviewData = false
+      this.loadingAttempts = 0
+      this.loadingProgress = 0
+      this.loadingStatus = '⏳ 正在启动爬虫...'
+      this.currentTaskId = taskId
+      
+      const maxAttempts = 30
+      
+      while (this.loadingAttempts < maxAttempts) {
+        // ✅ 如果预览已停止，退出循环
+        if (!this.previewLoading) {
+          console.log('⏹️ 预览已停止，退出轮询')
           return
         }
-      }
-      
-      // 更新进度提示
-      this.loadingStatus = `⏳ 正在等待数据生成 (${this.loadingAttempts}/${maxAttempts})...`
-      
-    } catch (error) {
-      console.error('❌ 获取预览数据失败:', error)
-      this.loadingStatus = `⚠️ 获取数据失败，正在重试 (${this.loadingAttempts}/${maxAttempts})...`
-    }
-    
-    // 等待2秒后重试
-    await new Promise(resolve => setTimeout(resolve, 2000))
-  }
-  
-  // 超时
-  this.previewLoading = false
-  this.previewHtml = `
-    <div style="text-align:center;padding:30px;">
-      <div style="font-size:48px;margin-bottom:16px;">⏰</div>
-      <p style="color:#E6A23C;font-size:16px;font-weight:500;">预览任务超时</p>
-      <p style="color:#909399;font-size:14px;margin-top:8px;">请检查爬虫是否正常运行，或目标网站是否可访问</p>
-      <p style="color:#c0c4cc;font-size:12px;margin-top:12px;">提示：可在 Django 终端查看详细日志</p>
-    </div>
-  `
-  this.$message.warning('预览任务超时，请检查后端日志')
-},
-    renderPreviewData(previewList, total) {
-  let html = `### 📊 采集预览 (共 ${total || previewList.length} 条)\n\n`
-  
-  previewList.forEach((item, idx) => {
-    html += `#### 记录 ${idx + 1}\n\n`
-    html += `- **URL**: ${item.url || '未知'}\n`
-    html += `- **分类**: ${item.category || '未知'}\n`
-    
-    const extractedData = item.extracted_data || {}
-    if (extractedData.content) {
-      if (extractedData.method) {
-        const methodLabels = {
-          'ai_ollama': '🤖 AI提取',
-          'ai_ollama_fixed': '🤖 AI提取+规则修正',
-          'rule_fallback': '📋 规则兜底',
-          'extraction_error': '⚠️ 提取失败'
-        }
-        html += `- **数据来源**: ${methodLabels[extractedData.method] || extractedData.method}\n`
-      }
-      if (extractedData.confidence) {
-        const confidenceLabels = {
-          'high': '🟢 高',
-          'medium': '🟡 中',
-          'low': '🔴 低'
-        }
-        html += `- **置信度**: ${confidenceLabels[extractedData.confidence] || extractedData.confidence}\n`
-      }
-      html += `\n${extractedData.content}\n`
-    } else {
-      html += `- **数据**: 待处理\n`
-    }
-    html += '\n---\n\n'
-  })
-  
-  return marked(html)
-},
+        
+        this.loadingAttempts++
+        this.loadingProgress = Math.round((this.loadingAttempts / maxAttempts) * 100)
+        this.loadingStatus = `⏳ 正在抓取数据 (${this.loadingAttempts}/${maxAttempts})...`
+        
+        try {
+          const res = await getTaskPreview(taskId, 10)
+          console.log('📥 预览数据响应:', res)
 
-    resetConfig() {
+          if (res.data && res.data.code === 200) {
+            const previewList = res.data.data?.preview || []
+            const total = res.data.data?.total || 0
+            
+            if (previewList.length > 0) {
+              this.previewHtml = this.renderPreviewData(previewList, total)
+              this.hasPreviewData = true
+              this.previewLoading = false
+              this.$message.success(`✅ 已加载 ${previewList.length} 条预览数据`)
+              return
+            }
+          }
+          
+          this.loadingStatus = `⏳ 正在等待数据生成 (${this.loadingAttempts}/${maxAttempts})...`
+          
+        } catch (error) {
+          console.error('❌ 获取预览数据失败:', error)
+          if (error.message?.includes('stopped') || error.response?.status === 400) {
+            console.log('⏹️ 任务已停止，退出轮询')
+            this.previewLoading = false
+            return
+          }
+          this.loadingStatus = `⚠️ 获取数据失败，正在重试 (${this.loadingAttempts}/${maxAttempts})...`
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+      
+      // 超时
+      this.previewLoading = false
+      this.previewHtml = this.renderTimeoutMessage()
+      this.$message.warning('预览任务超时，请检查后端日志')
+    },
+
+    renderPreviewData(previewList, total) {
+      let html = `### 📊 采集预览 (共 ${total || previewList.length} 条)\n\n`
+      
+      previewList.forEach((item, idx) => {
+        html += `#### 记录 ${idx + 1}\n\n`
+        html += `- **URL**: ${item.url || '未知'}\n`
+        html += `- **分类**: ${item.category || '未知'}\n`
+        
+        const extractedData = item.extracted_data || {}
+        if (extractedData.content) {
+          if (extractedData.method) {
+            const methodLabels = {
+              'ai_ollama': '🤖 AI提取',
+              'ai_ollama_fixed': '🤖 AI提取+规则修正',
+              'rule_fallback': '📋 规则兜底',
+              'extraction_error': '⚠️ 提取失败'
+            }
+            html += `- **数据来源**: ${methodLabels[extractedData.method] || extractedData.method}\n`
+          }
+          if (extractedData.confidence) {
+            const confidenceLabels = {
+              'high': '🟢 高',
+              'medium': '🟡 中',
+              'low': '🔴 低'
+            }
+            html += `- **置信度**: ${confidenceLabels[extractedData.confidence] || extractedData.confidence}\n`
+          }
+          html += `\n${extractedData.content}\n`
+        } else {
+          html += `- **数据**: 待处理\n`
+        }
+        html += '\n---\n\n'
+      })
+      
+      return marked(html)
+    },
+
+    // ✅ 停止预览任务并关闭弹窗
+    async handleResetConfig() {
+      if (this.previewLoading && this.currentTaskId) {
+        try {
+          this.stoppingPreview = true
+          this.$message.info('正在停止预览任务...')
+          
+          const res = await stopTask(this.currentTaskId)
+          console.log('🛑 停止预览任务响应:', res)
+          
+          if (res.data.code === 200) {
+            this.$message.success('预览任务已停止')
+          } else {
+            this.$message.warning(res.data.msg || '停止任务失败')
+          }
+        } catch (error) {
+          console.error('❌ 停止预览任务失败:', error)
+          this.$message.warning('停止任务失败，将关闭预览')
+        } finally {
+          this.stoppingPreview = false
+          this.previewLoading = false
+          this.currentTaskId = null
+        }
+      }
+      
       this.previewVisible = false
       this.$message.info('已返回基础配置')
+    },
+
+    // ✅ 弹窗关闭时停止任务
+    handleDialogClose() {
+      if (this.previewLoading && this.currentTaskId) {
+        this.handleResetConfig()
+      } else {
+        this.previewVisible = false
+      }
+    },
+
+    renderTimeoutMessage() {
+      return `
+        <div style="text-align:center;padding:30px;">
+          <div style="font-size:48px;margin-bottom:16px;">⏰</div>
+          <p style="color:#E6A23C;font-size:16px;font-weight:500;">预览任务超时</p>
+          <p style="color:#909399;font-size:14px;margin-top:8px;">请检查爬虫是否正常运行，或目标网站是否可访问</p>
+          <p style="color:#c0c4cc;font-size:12px;margin-top:12px;">提示：可在 Django 终端查看详细日志</p>
+        </div>
+      `
+    },
+
+    resetConfig() {
+      if (this.previewLoading && this.currentTaskId) {
+        this.handleResetConfig()
+      } else {
+        this.previewVisible = false
+        this.$message.info('已返回基础配置')
+      }
     },
 
     continueCollect() {

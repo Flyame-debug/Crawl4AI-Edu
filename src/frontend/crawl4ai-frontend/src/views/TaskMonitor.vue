@@ -246,35 +246,39 @@ export default {
     
     // ✅ 停止任务
     async stopRunningTask(task) {
-      const taskId = task.task_id || task.id
-      
-      // ✅ 预览任务特殊提示
-      let message = `确认停止任务【${task.task_name || taskId}】？`
-      if (task.task_type === 'preview') {
-        message += '\n⚠️ 预览任务停止后，已采集的数据会保留。'
-      }
-      
-      try {
-        await this.$confirm(message, '停止确认', { type: 'warning' })
-        
-        this.stoppingIds.push(taskId)
-        const res = await stopTask(taskId)
-        
-        if (res.data.code === 200) {
-          this.$message.success('任务已停止')
-          this.fetchTasks()  // 刷新列表
-        } else {
-          this.$message.error(res.data.msg || '停止失败')
-        }
-      } catch (error) {
-        if (error !== 'cancel') {
-          console.error('停止任务失败：', error)
-          this.$message.error('停止失败：' + (error.message || '未知错误'))
-        }
-      } finally {
-        this.stoppingIds = this.stoppingIds.filter(id => id !== taskId)
-      }
-    },
+  // ✅ 获取正确的 task_id
+  const taskId = task.task_id || task.id
+  if (!taskId) {
+    ElMessage.error('任务ID不存在')
+    return
+  }
+  
+  let message = `确认停止任务【${task.task_name || taskId}】？`
+  if (task.task_type === 'preview') {
+    message += '\n⚠️ 预览任务停止后，已采集的数据会保留。'
+  }
+  
+  try {
+    await this.$confirm(message, '停止确认', { type: 'warning' })
+    
+    this.stoppingIds.push(taskId)
+    const res = await stopTask(taskId)
+    
+    if (res.data.code === 200) {
+      this.$message.success('任务已停止')
+      this.fetchTasks()
+    } else {
+      this.$message.error(res.data.msg || '停止失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('停止任务失败：', error)
+      this.$message.error('停止失败：' + (error.message || '未知错误'))
+    }
+  } finally {
+    this.stoppingIds = this.stoppingIds.filter(id => id !== taskId)
+  }
+},
 
     // ✅ 重新执行任务（修复版）
     // TaskMonitor.vue - rerunTask 方法
@@ -309,66 +313,83 @@ async rerunTask(task) {
 },
 
     async viewDetail(task) {
-      this.detailLoading = true
-      this.detailDialogVisible = true
-      try {
-        const res = await getTaskDetail(task.id)
-        if (res.data.code === 200) {
-          const data = res.data.data || {}
-          const markdownContent = data.extracted_data || ''
-          if (markdownContent && typeof markdownContent === 'string') {
-            this.detailHtml = marked(markdownContent)
-          } else {
-            this.detailHtml = `<pre>${JSON.stringify(data, null, 2)}</pre>`
-          }
-        } else {
-          this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
-        }
-      } catch {
-        this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
-      } finally {
-        this.detailLoading = false
+  // ✅ 获取正确的 task_id
+  const taskId = task.task_id || task.id
+  if (!taskId) {
+    ElMessage.error('任务ID不存在')
+    return
+  }
+  
+  this.detailLoading = true
+  this.detailDialogVisible = true
+  try {
+    const res = await getTaskDetail(taskId)
+    if (res.data.code === 200) {
+      const data = res.data.data || {}
+      const markdownContent = data.extracted_data || ''
+      if (markdownContent && typeof markdownContent === 'string') {
+        this.detailHtml = marked(markdownContent)
+      } else {
+        this.detailHtml = `<pre>${JSON.stringify(data, null, 2)}</pre>`
       }
-    },
+    } else {
+      this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
+    }
+  } catch (error) {
+    console.error('获取任务详情失败:', error)
+    this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
+  } finally {
+    this.detailLoading = false
+  }
+},
     
     async viewLog(task) {
-      try {
-        const taskId = task.task_id || task.id
-        const res = await getTaskLogs(taskId, 200)
-        if (res.data && res.data.code === 200) {
-          const logs = res.data.data.logs || []
-          if (logs.length > 0) {
-            const logContent = logs.join('\n')
-            ElMessageBox.alert(
-              `<pre style="max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;line-height:1.6;">${logContent}</pre>`,
-              `📋 任务日志 - ${task.task_name || taskId}`,
-              { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
-            )
-            return
-          }
-        }
+  try {
+    // ✅ 获取正确的 task_id
+    const taskId = task.task_id || task.id
+    if (!taskId) {
+      ElMessage.error('任务ID不存在')
+      return
+    }
+    
+    const res = await getTaskLogs(taskId, 200)
+    if (res.data && res.data.code === 200) {
+      const logs = res.data.data.logs || []
+      if (logs.length > 0) {
+        const logContent = logs.join('\n')
         ElMessageBox.alert(
-          `<div style="padding:20px;text-align:center;color:#909399;">暂无日志</div>`,
+          `<pre style="max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;line-height:1.6;">${logContent}</pre>`,
           `📋 任务日志 - ${task.task_name || taskId}`,
           { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
         )
-      } catch (error) {
-        ElMessage.error('查看日志失败')
+        return
       }
-    },
+    }
+    ElMessageBox.alert(
+      `<div style="padding:20px;text-align:center;color:#909399;">暂无日志</div>`,
+      `📋 任务日志 - ${task.task_name || taskId}`,
+      { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
+    )
+  } catch (error) {
+    console.error('查看日志失败:', error)
+    ElMessage.error('查看日志失败')
+  }
+},
   
     // ===== 导出功能 =====
     async exportTask(task, format) {
       try {
-        if (task.task_type === 'preview') {
-          ElMessage.warning('预览任务不支持导出')
-          return
-        }
         const taskId = task.task_id || task.id
         if (!taskId) {
           ElMessage.error('任务ID缺失')
           return
         }
+    
+        if (task.task_type === 'preview') {
+          ElMessage.warning('预览任务不支持导出')
+          return
+        }
+        
         const res = await getTaskPreview(taskId, 1000)
         if (!res || !res.data || res.data.code !== 200) {
           ElMessage.error('获取任务数据失败')

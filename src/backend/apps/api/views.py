@@ -1378,36 +1378,52 @@ def pause_task(request, task_id):
         return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
 
 
+# views.py - 修改 stop_task
+
 @api_view(['POST'])
 def stop_task(request, task_id):
     """停止任务 - 增强版"""
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
-        # ✅ 允许停止预览任务
-        if task.status not in ['running', 'paused', 'pending']:
+        # ✅ 允许停止任何状态的任务（包括 preview）
+        if task.status not in ['running', 'pending']:
+            # 如果已经完成或停止，直接返回成功
+            if task.status in ['stopped', 'completed', 'failed']:
+                return Response({
+                    'code': 200,
+                    'msg': f'任务已处于 {task.status} 状态',
+                    'data': {'task_id': task_id, 'status': task.status}
+                })
             return Response({
                 'code': 400, 
                 'msg': f'当前状态 {task.status} 无法停止', 
                 'data': None
             }, status=400)
         
-        # ✅ 设置停止信号
+        # ✅ 1. 设置停止信号（如果存在）
         with TASK_CONTROL_LOCK:
             if task_id in TASK_CONTROL_SIGNALS:
                 TASK_CONTROL_SIGNALS[task_id]['stop_event'] = True
                 TASK_CONTROL_SIGNALS[task_id]['is_stop'] = True
                 print(f"✅ 停止信号已发送: {task_id}")
             else:
-                print(f"⚠️ 任务 {task_id} 不在控制信号中，直接更新状态")
+                print(f"⚠️ 任务 {task_id} 不在控制信号中")
         
-        # ✅ 总是更新数据库状态
+        # ✅ 2. 强制更新数据库状态
         task.status = 'stopped'
         task.save()
+        print(f"✅ 任务状态已更新为 stopped: {task_id}")
         
-        # ✅ 如果是预览任务，清理预览数据限制
+        # ✅ 3. 如果是预览任务，清理预览数据限制
         if task.task_type == 'preview':
-            print(f"📌 预览任务 {task_id} 已停止，预览计数将自动更新")
+            from .models import PageSnapshot
+            # 标记预览任务的所有快照为已停止
+            PageSnapshot.objects.filter(task=task).update(
+                process_status='stopped',
+                error_info='用户停止预览'
+            )
+            print(f"📌 预览任务 {task_id} 的快照已标记为停止")
         
         return Response({
             'code': 200,
@@ -1423,6 +1439,8 @@ def stop_task(request, task_id):
         return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
     except Exception as e:
         print(f"❌ 停止任务异常: {e}")
+        import traceback
+        traceback.print_exc()
         return Response({
             'code': 500,
             'msg': f'停止失败: {str(e)}',
