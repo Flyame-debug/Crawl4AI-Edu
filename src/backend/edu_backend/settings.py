@@ -90,7 +90,7 @@ DATABASES = {
         'HOST': '127.0.0.1',
         'PORT': '5432',
         'OPTIONS': {
-            'client_encoding': 'UTF8',  # ← 添加这一行
+            'options': '-c client_encoding=UTF8',  # ✅ 强制 UTF-8
         },
     }
 }

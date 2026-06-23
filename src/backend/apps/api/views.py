@@ -1725,7 +1725,6 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     # ============================================================
     # 注册控制信号
     # ============================================================
-    from . import TASK_CONTROL_SIGNALS, TASK_CONTROL_LOCK
     
     with TASK_CONTROL_LOCK:
         TASK_CONTROL_SIGNALS[task_id] = {

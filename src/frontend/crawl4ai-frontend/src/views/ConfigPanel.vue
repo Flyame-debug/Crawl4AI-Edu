@@ -100,14 +100,32 @@
     </div>
 
     <!-- 预览弹窗 -->
-    <el-dialog v-model="previewVisible" title="采集预览" width="60%" :close-on-click-modal="false">
-      <div v-if="previewLoading" v-loading="previewLoading" style="min-height: 100px;"></div>
-      <div v-else class="markdown-body" v-html="previewHtml"></div>
-      <template #footer>
-        <el-button @click="resetConfig">重新配置</el-button>
-        <el-button type="primary" @click="continueCollect">继续</el-button>
-      </template>
-    </el-dialog>
+    <!-- 预览弹窗 -->
+<el-dialog v-model="previewVisible" title="采集预览" width="60%" :close-on-click-modal="false">
+  <!-- ✅ 加载等待界面 -->
+  <div v-if="previewLoading" class="preview-loading">
+    <div class="loading-spinner">
+      <el-icon class="is-loading" size="32"><Loading /></el-icon>
+    </div>
+    <div class="loading-text">
+      <h3>🤖 正在执行预览采集</h3>
+      <p>{{ loadingStatus }}</p>
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+      </div>
+      <p class="progress-text">{{ loadingProgress }}% ({{ loadingAttempts }}/30)</p>
+      <p class="hint-text">⏳ 正在抓取页面内容，请耐心等待...</p>
+    </div>
+  </div>
+  
+  <!-- ✅ 结果展示 -->
+  <div v-else class="markdown-body" v-html="previewHtml"></div>
+  
+  <template #footer>
+    <el-button @click="resetConfig">重新配置</el-button>
+    <el-button type="primary" @click="continueCollect" :disabled="!hasPreviewData">继续</el-button>
+  </template>
+</el-dialog>
   </div>
 </template>
 
@@ -134,6 +152,7 @@ export default {
         waitTime: 3,
         cacheEnabled: false,
         timeoutEnabled: false,
+        
         timeout: 30
       },
       aiConfig: {
@@ -145,6 +164,13 @@ export default {
         prompts: ['提取教师姓名、职称、研究方向、邮箱']
       },
       advancedCode: `# 示例假代码
+      previewLoading: false,
+      previewHtml: '',
+      loadingStatus: '⏳ 正在启动爬虫...',
+      loadingProgress: 0,
+      loadingAttempts: 0,
+      hasPreviewData: false
+
 import requests
 
 def fetch_data(url):
@@ -416,72 +442,95 @@ def fetch_data(url):
 
     async fetchPreviewData(taskId) {
   this.previewLoading = true
-  try {
-    const res = await getTaskPreview(taskId, 10)
-    console.log('📥 预览数据响应:', res)
+  this.hasPreviewData = false
+  this.loadingAttempts = 0
+  this.loadingProgress = 0
+  this.loadingStatus = '⏳ 正在启动爬虫...'
+  
+  const maxAttempts = 30
+  
+  while (this.loadingAttempts < maxAttempts) {
+    this.loadingAttempts++
+    this.loadingProgress = Math.round((this.loadingAttempts / maxAttempts) * 100)
+    this.loadingStatus = `⏳ 正在抓取数据 (${this.loadingAttempts}/${maxAttempts})...`
+    
+    try {
+      const res = await getTaskPreview(taskId, 10)
+      console.log('📥 预览数据响应:', res)
 
-    if (res.data && res.data.code === 200) {
-      // 提取数据列表
-      const previewList = res.data.data?.preview || []
-      
-      if (previewList.length > 0) {
-        let html = '### 📊 采集预览\n\n'
+      if (res.data && res.data.code === 200) {
+        const previewList = res.data.data?.preview || []
+        const total = res.data.data?.total || 0
         
-        previewList.forEach((item, idx) => {
-          html += `#### 记录 ${idx + 1}\n\n`
-          html += `- **URL**: ${item.url || '未知'}\n`
-          html += `- **分类**: ${item.category || '未知'}\n`
-          
-          // ✅ 适配 B 模块返回的对象格式
-          const extractedData = item.extracted_data || {}
-          
-          if (Object.keys(extractedData).length > 0) {
-            // 检查是否是 B 模块格式（包含 content）
-            if (extractedData.content) {
-              // 显示数据来源和置信度
-              if (extractedData.method) {
-                const methodLabels = {
-                  'ai_ollama': '🤖 AI提取',
-                  'ai_ollama_fixed': '🤖 AI提取+规则修正',
-                  'rule_fallback': '📋 规则兜底',
-                  'extraction_error': '⚠️ 提取失败'
-                }
-                html += `- **数据来源**: ${methodLabels[extractedData.method] || extractedData.method}\n`
-              }
-              if (extractedData.confidence) {
-                const confidenceLabels = {
-                  'high': '🟢 高',
-                  'medium': '🟡 中',
-                  'low': '🔴 低'
-                }
-                html += `- **置信度**: ${confidenceLabels[extractedData.confidence] || extractedData.confidence}\n`
-              }
-              // 渲染 content
-              html += `\n${extractedData.content}\n`
-            } else {
-              // 不是 B 模块格式，显示 JSON
-              html += `- **数据**: \`${JSON.stringify(extractedData)}\`\n`
-            }
-          } else {
-            // 没有数据
-            html += `- **数据**: 无\n`
-          }
-          html += '\n---\n\n'
-        })
-        
-        this.previewHtml = marked(html)
-      } else {
-        this.previewHtml = '<p>暂无预览数据</p>'
+        if (previewList.length > 0) {
+          // ✅ 有数据，渲染显示
+          this.previewHtml = this.renderPreviewData(previewList, total)
+          this.hasPreviewData = true
+          this.previewLoading = false
+          this.$message.success(`✅ 已加载 ${previewList.length} 条预览数据`)
+          return
+        }
       }
-    } else {
-      this.previewHtml = '<p>获取预览失败</p>'
+      
+      // 更新进度提示
+      this.loadingStatus = `⏳ 正在等待数据生成 (${this.loadingAttempts}/${maxAttempts})...`
+      
+    } catch (error) {
+      console.error('❌ 获取预览数据失败:', error)
+      this.loadingStatus = `⚠️ 获取数据失败，正在重试 (${this.loadingAttempts}/${maxAttempts})...`
     }
-  } catch (error) {
-    console.error('❌ 获取预览数据失败:', error)
-    this.previewHtml = '<p>获取预览失败</p>'
-  } finally {
-    this.previewLoading = false
+    
+    // 等待2秒后重试
+    await new Promise(resolve => setTimeout(resolve, 2000))
   }
+  
+  // 超时
+  this.previewLoading = false
+  this.previewHtml = `
+    <div style="text-align:center;padding:30px;">
+      <div style="font-size:48px;margin-bottom:16px;">⏰</div>
+      <p style="color:#E6A23C;font-size:16px;font-weight:500;">预览任务超时</p>
+      <p style="color:#909399;font-size:14px;margin-top:8px;">请检查爬虫是否正常运行，或目标网站是否可访问</p>
+      <p style="color:#c0c4cc;font-size:12px;margin-top:12px;">提示：可在 Django 终端查看详细日志</p>
+    </div>
+  `
+  this.$message.warning('预览任务超时，请检查后端日志')
+},
+    renderPreviewData(previewList, total) {
+  let html = `### 📊 采集预览 (共 ${total || previewList.length} 条)\n\n`
+  
+  previewList.forEach((item, idx) => {
+    html += `#### 记录 ${idx + 1}\n\n`
+    html += `- **URL**: ${item.url || '未知'}\n`
+    html += `- **分类**: ${item.category || '未知'}\n`
+    
+    const extractedData = item.extracted_data || {}
+    if (extractedData.content) {
+      if (extractedData.method) {
+        const methodLabels = {
+          'ai_ollama': '🤖 AI提取',
+          'ai_ollama_fixed': '🤖 AI提取+规则修正',
+          'rule_fallback': '📋 规则兜底',
+          'extraction_error': '⚠️ 提取失败'
+        }
+        html += `- **数据来源**: ${methodLabels[extractedData.method] || extractedData.method}\n`
+      }
+      if (extractedData.confidence) {
+        const confidenceLabels = {
+          'high': '🟢 高',
+          'medium': '🟡 中',
+          'low': '🔴 低'
+        }
+        html += `- **置信度**: ${confidenceLabels[extractedData.confidence] || extractedData.confidence}\n`
+      }
+      html += `\n${extractedData.content}\n`
+    } else {
+      html += `- **数据**: 待处理\n`
+    }
+    html += '\n---\n\n'
+  })
+  
+  return marked(html)
 },
 
     resetConfig() {
@@ -640,5 +689,61 @@ def fetch_data(url):
 }
 .markdown-body :deep(th) {
   background-color: #f2f2f2;
+}
+
+.preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  padding: 20px;
+}
+
+.loading-spinner {
+  margin-bottom: 20px;
+}
+
+.loading-text {
+  text-align: center;
+}
+
+.loading-text h3 {
+  color: #303133;
+  font-size: 18px;
+  margin: 0 0 8px 0;
+}
+
+.loading-text p {
+  color: #909399;
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+.progress-bar {
+  width: 300px;
+  height: 8px;
+  background: #ebeef5;
+  border-radius: 4px;
+  margin: 12px auto;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #409EFF, #67C23A);
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.progress-text {
+  font-size: 13px;
+  color: #909399;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: #c0c4cc;
+  margin-top: 8px !important;
 }
 </style>
