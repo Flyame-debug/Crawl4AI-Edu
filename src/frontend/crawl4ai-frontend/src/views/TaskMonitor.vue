@@ -60,13 +60,24 @@
           <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" min-width="380" fixed="right">
+      <el-table-column label="操作" min-width="420" fixed="right">
         <template #default="scope">
           <div class="op-buttons">
             <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
             <el-button size="small" @click="viewLog(scope.row)">日志</el-button>
-            <el-button size="small" @click="rerunTask(scope.row)">重新执行</el-button>
-            <!-- ✅ 新增：停止按钮（仅在运行或等待时显示） -->
+            
+            <!-- ✅ 重新执行按钮 -->
+            <el-button 
+              size="small"
+              type="warning"
+              @click="rerunTask(scope.row)"
+              :disabled="!scope.row.template_id"
+              :title="!scope.row.template_id ? '缺少关联模板，无法重新执行' : ''"
+            >
+              🔄 重新执行
+            </el-button>
+
+            <!-- ✅ 停止按钮（仅在运行或等待时显示） -->
             <el-button
               v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
               size="small"
@@ -75,23 +86,23 @@
             >
               停止
             </el-button>
-            <el-dropdown>
+            
+            <!-- ✅ 导出下拉菜单 -->
+            <el-dropdown @command="(format) => exportTask(scope.row, format)">
               <el-button size="small" type="primary">
                 导出 <el-icon><ArrowDown /></el-icon>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="exportTask(scope.row, 'json')">导出 JSON</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'csv')">导出 CSV</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'xlsx')">导出 Excel</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'html')">导出 HTML</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'markdown')">导出 Markdown</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'txt')">导出 TXT</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'xml')">导出 XML</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'sql')">导出 SQL</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'pdf')">导出 PDF</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'doc')">导出 Word</el-dropdown-item>
-                  <el-dropdown-item @click="exportTask(scope.row, 'rss')">导出 RSS</el-dropdown-item>
+                  <el-dropdown-item command="json">📊 JSON</el-dropdown-item>
+                  <el-dropdown-item command="csv">📊 CSV</el-dropdown-item>
+                  <el-dropdown-item command="xlsx">📊 Excel</el-dropdown-item>
+                  <el-dropdown-item divided command="html">📄 HTML</el-dropdown-item>
+                  <el-dropdown-item command="markdown">📄 Markdown</el-dropdown-item>
+                  <el-dropdown-item command="txt">📄 TXT</el-dropdown-item>
+                  <el-dropdown-item divided command="xml">📦 XML</el-dropdown-item>
+                  <el-dropdown-item command="sql">📦 SQL</el-dropdown-item>
+                  <el-dropdown-item command="rss">📡 RSS</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -100,10 +111,10 @@
       </el-table-column>
     </el-table>
 
-    <!-- 预览结果 Markdown 弹窗 -->
+    <!-- 预览结果弹窗 -->
     <el-dialog
       v-model="detailDialogVisible"
-      title="预览结果"
+      title="任务详情"
       width="700px"
       :close-on-click-modal="false"
     >
@@ -173,18 +184,10 @@ export default {
       } catch (error) {
         console.error('获取任务列表失败：', error)
         ElMessage.error('获取任务列表失败，请稍后重试')
-        this.tasks = this.getMockTasks()
+        this.tasks = []
       } finally {
         this.loading = false
       }
-    },
-    
-    getMockTasks() {
-      return [
-        { id: 1, task_name: '示例任务A', template_name: '教师信息模板', created_at: '2026-06-17T10:00:00', status: 'completed', total_pages: 120, success_pages: 120 },
-        { id: 2, task_name: '示例任务B', template_name: '课程信息模板', created_at: '2026-06-17T11:30:00', status: 'running', total_pages: 50, success_pages: 45 },
-        { id: 3, task_name: '示例任务C', template_name: '科研成果模板', created_at: '2026-06-17T12:15:00', status: 'failed', total_pages: 10, success_pages: 0 }
-      ]
     },
     
     formatDate(date) {
@@ -238,7 +241,7 @@ export default {
       return map[status] || 'info'
     },
     
-    // ✅ 新增：停止任务
+    // ✅ 停止任务
     async stopRunningTask(task) {
       const taskId = task.task_id || task.id
       try {
@@ -257,6 +260,38 @@ export default {
         }
       }
     },
+
+    // ✅ 重新执行任务（修复版）
+    // TaskMonitor.vue - rerunTask 方法
+async rerunTask(task) {
+  if (!task.template_id) {
+    ElMessage.warning('该任务没有关联模板，无法重新执行')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm('确认重新执行？', '提示', { type: 'info' })
+    
+    const res = await startTask({
+      template_id: task.template_id,  // ✅ 直接传递模板ID
+      task_type: task.task_type || 'formal',
+      config: {
+        max_depth: 2,
+        max_concurrent: 5
+      }
+    })
+    
+    if (res.data.code === 200) {
+      ElMessage.success('任务已重新启动')
+      this.fetchTasks()
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('重新执行失败:', error)
+      ElMessage.error('重新执行失败')
+    }
+  }
+},
 
     async viewDetail(task) {
       this.detailLoading = true
@@ -306,33 +341,8 @@ export default {
         ElMessage.error('查看日志失败')
       }
     },
-    
-    async rerunTask(task) {
-      try {
-        await ElMessageBox.confirm(`确认重新执行任务【${task.task_name}】？`, '提示', { type: 'info' })
-        if (!task.template_id) {
-          ElMessage.warning('任务缺少关联模板，无法重新执行')
-          return
-        }
-        await startTask({
-          template_id: task.template_id,
-          task_type: task.task_type || 'formal',
-          user_prompt: task.user_prompt || '',
-          ai_model: task.ai_model || '',
-          ai_api_url: task.ai_api_url || '',
-          ai_api_key: task.ai_api_key || ''
-        })
-        ElMessage.success('任务已重新启动')
-        this.fetchTasks()
-      } catch (error) {
-        if (error !== 'cancel') {
-          console.error('重新执行失败：', error)
-          ElMessage.error('操作失败')
-        }
-      }
-    },
   
-    // 导出任务数据（扩展多格式）
+    // ===== 导出功能 =====
     async exportTask(task, format) {
       try {
         if (task.task_type === 'preview') {
@@ -403,18 +413,10 @@ export default {
             mime = 'application/sql'
             ext = 'sql'
             break
-          case 'pdf':
-            this.generatePDF(taskInfo, dataList)
-            return
-          case 'doc':
-            content = this.generateDOC(taskInfo, dataList)
-            mime = 'application/msword'
-            ext = 'doc'
-            break
           case 'rss':
             content = this.generateRSS(dataList)
             mime = 'application/rss+xml'
-            ext = 'rss'
+            ext = 'xml'
             break
           default:
             ElMessage.error('不支持的格式')
@@ -428,7 +430,7 @@ export default {
       }
     },
 
-    // ====== 新增的生成函数 ======
+    // ===== 生成函数 =====
     generateCSV(data) {
       const columns = Object.keys(data[0])
       let csv = '\ufeff' + columns.join(',') + '\n'
@@ -461,7 +463,9 @@ export default {
       data.forEach(row => {
         xml += '  <record>\n'
         Object.entries(row).forEach(([k, v]) => {
-          xml += `    <${k}>${v}</${k}>\n`
+          // ✅ 确保XML特殊字符被转义
+          const value = String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          xml += `    <${k}>${value}</${k}>\n`
         })
         xml += '  </record>\n'
       })
@@ -476,6 +480,7 @@ export default {
         const vals = cols.map(c => {
           const v = row[c] ?? ''
           if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
+          if (typeof v === 'object') return `'${JSON.stringify(v).replace(/'/g, "''")}'`
           return v
         }).join(', ')
         return `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${vals});`
@@ -483,25 +488,14 @@ export default {
       return `-- Task export\n${values}\n`
     },
 
-    generatePDF(info, data) {
-      const html = this.generateHTML(info, data)
-      const win = window.open('', '_blank', 'width=800,height=600')
-      win.document.write(html)
-      win.document.close()
-      win.focus()
-      win.print()
-    },
-
-    generateDOC(info, data) {
-      return this.generateHTML(info, data) // Word 可以打开 HTML 文件
-    },
-
     generateRSS(data) {
       let rss = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n<title>Task Export</title>\n<description>采集数据</description>\n`
       data.forEach(row => {
+        const title = row.title || row.name || row.url || 'Item'
+        const description = JSON.stringify(row).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         rss += '  <item>\n'
-        rss += `    <title>${row.title || row.url || 'Item'}</title>\n`
-        rss += `    <description>${JSON.stringify(row)}</description>\n`
+        rss += `    <title>${title}</title>\n`
+        rss += `    <description>${description}</description>\n`
         rss += '  </item>\n'
       })
       rss += '</channel>\n</rss>'
@@ -518,7 +512,6 @@ export default {
       URL.revokeObjectURL(url)
     },
 
-    // 保留原有的 generateHTML 和 generateMarkdown，只做参数适配
     generateHTML(info, data) {
       const columns = data.length > 0 ? Object.keys(data[0]) : []
       let tableHTML = ''
@@ -654,6 +647,7 @@ export default {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .op-buttons .el-button {
   margin: 0;

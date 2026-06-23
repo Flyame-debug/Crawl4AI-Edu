@@ -43,7 +43,22 @@ class PageSnapshot(models.Model):
     )
     extracted_data = models.JSONField(default=dict, blank=True, null=True, verbose_name="结构化提取数据")
     error_info = models.TextField(blank=True, null=True, verbose_name="错误信息")
+    # ========== 新增：数据来源标记 ==========
+    data_source = models.CharField(
+        max_length=50, 
+        blank=True, 
+        null=True,
+        choices=[
+            ('crawled', '爬虫采集'),
+            ('imported', '手动导入'),
+            ('api', 'API推送'),
+        ],
+        verbose_name="数据来源"
+    )
     
+    # ========== 新增：导出标记 ==========
+    exported_at = models.DateTimeField(blank=True, null=True, verbose_name="导出时间")
+    export_count = models.IntegerField(default=0, verbose_name="导出次数")
     # ========== 任务关联字段 ==========
     task_type = models.CharField(
         max_length=20, 

@@ -84,4 +84,5 @@ urlpatterns = [
     path('tasks/<str:task_id>/progress/', views.task_progress_api, name='task_progress'),
     path('tasks/<str:task_id>/preview/', views.task_preview_api, name='task_preview'),
     path('tasks/<str:task_id>/download/', views.task_download_api, name='task_download'),
+    path('tasks/<str:task_id>/export/', views.task_export_api, name='task_export'),
 ]

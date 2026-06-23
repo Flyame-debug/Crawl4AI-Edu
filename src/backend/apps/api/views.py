@@ -1239,15 +1239,41 @@ def start_task(request):
     print("=" * 60)
     print("📥 收到 start_task 请求")
     print(f"📥 request.data: {request.data}")
-    print(f"📥 template_id: {request.data.get('template_id')}")
     print("=" * 60)
+    
     template_id = request.data.get('template_id')
+    original_task_id = request.data.get('original_task_id')  # ✅ 新增：原任务ID
     task_type = request.data.get('task_type', 'formal')
     user_prompt = request.data.get('user_prompt', '')
     ai_model = request.data.get('ai_model', 'qwen2:7b')
     ai_api_url = request.data.get('ai_api_url', 'http://127.0.0.1:11434')
     ai_api_key = request.data.get('ai_api_key', '')
     generated_rule = request.data.get('generated_rule', '')
+    
+    # ✅ 如果传入了 original_task_id，从原任务获取模板和配置
+    if original_task_id and not template_id:
+        try:
+            original_task = CrawlTask.objects.get(task_id=original_task_id)
+            if original_task.template:
+                template_id = original_task.template.id
+                print(f"✅ 从原任务获取模板ID: {template_id}")
+                # 继承原任务的其他配置
+                if not user_prompt and original_task.template.user_prompt:
+                    user_prompt = original_task.template.user_prompt
+                if not generated_rule and original_task.template.crawler_rule:
+                    generated_rule = original_task.template.crawler_rule
+            else:
+                return Response({
+                    'code': 400,
+                    'msg': '原任务没有关联模板，无法重新执行',
+                    'data': None
+                }, status=400)
+        except CrawlTask.DoesNotExist:
+            return Response({
+                'code': 404,
+                'msg': '原任务不存在',
+                'data': None
+            }, status=404)
     
     # 预览任务限制最多10条
     if task_type == 'preview':
@@ -1358,14 +1384,21 @@ def stop_task(request, task_id):
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
-        if task.status not in ['running', 'paused']:
-            return Response({'code': 400, 'msg': '只有运行中或暂停的任务可以停止', 'data': None}, status=400)
+        # ✅ 检查状态
+        if task.status not in ['running', 'paused', 'pending']:
+            return Response({
+                'code': 400, 
+                'msg': f'只有运行中、等待中或暂停的任务可以停止，当前状态: {task.status}', 
+                'data': None
+            }, status=400)
         
+        # ✅ 设置停止信号
         with TASK_CONTROL_LOCK:
             if task_id in TASK_CONTROL_SIGNALS:
                 TASK_CONTROL_SIGNALS[task_id]['stop_event'] = True
                 TASK_CONTROL_SIGNALS[task_id]['is_stop'] = True
         
+        # ✅ 更新状态
         task.status = 'stopped'
         task.save()
         
@@ -1375,8 +1408,17 @@ def stop_task(request, task_id):
             'data': {'task_id': task_id, 'status': 'stopped'}
         })
     except CrawlTask.DoesNotExist:
-        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
-
+        return Response({
+            'code': 404, 
+            'msg': '任务不存在', 
+            'data': None
+        }, status=404)
+    except Exception as e:
+        return Response({
+            'code': 500,
+            'msg': f'停止失败: {str(e)}',
+            'data': None
+        }, status=500)
 
 @api_view(['DELETE'])
 def delete_task(request, task_id):
@@ -1515,19 +1557,16 @@ def task_progress_api(request, task_id):
 
 @api_view(['GET'])
 def task_preview_api(request, task_id):
-    """采集数据预览（优先返回结构化清洗数据）"""
+    """采集数据预览（返回结构化数据 + 原始HTML）"""
     limit = int(request.query_params.get('limit', 10))
     
     try:
-        # 尝试将 task_id 转换为 UUID
         import uuid
         try:
             task_uuid = uuid.UUID(task_id)
         except ValueError:
-            # 如果 task_id 不是 UUID 格式，尝试用字符串查询
             task_uuid = task_id
         
-        # 查询任务
         try:
             if isinstance(task_uuid, uuid.UUID):
                 task = CrawlTask.objects.get(task_id=task_uuid)
@@ -1544,12 +1583,24 @@ def task_preview_api(request, task_id):
         pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
         
         preview = []
+        raw_html = None  # ✅ 新增：存储原始HTML
+        markdown_content = None  # ✅ 新增：存储Markdown
+        
         for page in pages:
+            # ✅ 保存原始HTML（取第一条记录的）
+            if not raw_html and page.raw_html:
+                raw_html = page.raw_html
+            if not markdown_content and page.markdown:
+                markdown_content = page.markdown
+            
             if page.extracted_data:
-                # 如果有提取的数据，直接返回
-                preview.append(page.extracted_data)
+                preview.append({
+                    'url': page.url,
+                    'category': page.category,
+                    'extracted_data': page.extracted_data,
+                    'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+                })
             else:
-                # 否则返回基本信息
                 preview.append({
                     'url': page.url,
                     'category': page.category,
@@ -1564,7 +1615,11 @@ def task_preview_api(request, task_id):
             'msg': 'success',
             'data': {
                 'total': total,
-                'preview': preview
+                'preview': preview,
+                'raw_html': raw_html,  # ✅ 新增：返回原始HTML
+                'markdown': markdown_content,  # ✅ 新增：返回Markdown
+                'has_raw': bool(raw_html),  # ✅ 新增：标记是否有原始数据
+                'has_markdown': bool(markdown_content)  # ✅ 新增：标记是否有Markdown
             }
         })
         
@@ -1577,7 +1632,11 @@ def task_preview_api(request, task_id):
             'msg': f'获取预览数据失败: {str(e)}',
             'data': {
                 'total': 0,
-                'preview': []
+                'preview': [],
+                'raw_html': None,
+                'markdown': None,
+                'has_raw': False,
+                'has_markdown': False
             }
         }, status=500)
 
@@ -1954,3 +2013,326 @@ def review_template(request, pk):
     
     else:
         return Response({'code': 400, 'msg': 'action 必须是 approve 或 reject'}, status=400)
+    
+    
+# ==================== 导出接口 ====================
+
+@api_view(['GET'])
+def task_export_api(request, task_id):
+    """
+    导出任务结果（支持多种格式）
+    GET /api/tasks/<task_id>/export/?format=json|csv|md|txt|html|xml|sql|rss
+    """
+    import csv
+    import json
+    from django.http import HttpResponse
+    from io import StringIO
+    from datetime import datetime
+    
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+    except CrawlTask.DoesNotExist:
+        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
+    
+    format_type = request.query_params.get('format', 'json')
+    
+    # 获取数据
+    pages = PageSnapshot.objects.filter(task=task)
+    raw_html = pages.first().raw_html if pages.first() else None
+    
+    # 构建结构化数据
+    structured_data = []
+    for page in pages:
+        if page.extracted_data:
+            structured_data.append(page.extracted_data)
+        else:
+            structured_data.append({
+                'url': page.url,
+                'category': page.category,
+                'content': page.markdown[:500] if page.markdown else '',
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+    
+    # ===== JSON =====
+    if format_type == 'json':
+        response_data = {
+            'task_id': str(task.task_id),
+            'task_name': task.task_name,
+            'created_at': task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'total': len(structured_data),
+            'data': structured_data
+        }
+        if raw_html:
+            response_data['raw_html'] = raw_html[:10000]
+        
+        response = HttpResponse(
+            json.dumps(response_data, ensure_ascii=False, indent=2),
+            content_type='application/json'
+        )
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.json"'
+        return response
+    
+    # ===== CSV =====
+    elif format_type == 'csv':
+        output = StringIO()
+        if structured_data:
+            fieldnames = list(structured_data[0].keys())
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(structured_data)
+        
+        response = HttpResponse(output.getvalue(), content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.csv"'
+        return response
+    
+    # ===== TXT =====
+    elif format_type == 'txt':
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"采集结果 - {task.task_name or task.task_id}")
+        lines.append("=" * 60)
+        lines.append(f"任务ID: {task.task_id}")
+        lines.append(f"创建时间: {task.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"数据量: {len(structured_data)} 条")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        for i, item in enumerate(structured_data, 1):
+            lines.append(f"[记录 {i}]")
+            for key, value in item.items():
+                lines.append(f"  {key}: {value}")
+            lines.append("")
+            lines.append("-" * 30)
+        
+        response = HttpResponse("\n".join(lines), content_type='text/plain')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.txt"'
+        return response
+    
+    # ===== Markdown =====
+    elif format_type == 'md':
+        lines = []
+        lines.append(f"# 采集结果 - {task.task_name or task.task_id}")
+        lines.append("")
+        lines.append(f"- **任务ID**: {task.task_id}")
+        lines.append(f"- **创建时间**: {task.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"- **数据量**: {len(structured_data)} 条")
+        lines.append("")
+        
+        for i, item in enumerate(structured_data, 1):
+            lines.append(f"## 记录 {i}")
+            lines.append("")
+            for key, value in item.items():
+                lines.append(f"- **{key}**: {value}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        
+        response = HttpResponse("\n".join(lines), content_type='text/markdown')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.md"'
+        return response
+    
+    # ===== HTML =====
+    elif format_type == 'html':
+        template = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>采集结果 - {task_name}</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: #409EFF; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f2f2f2; }
+        .raw-data { background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px; }
+        .footer { margin-top: 40px; text-align: center; color: #999; font-size: 12px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 采集结果</h1>
+        <p><strong>任务:</strong> {task_name}</p>
+        <p><strong>任务ID:</strong> {task_id}</p>
+        <p><strong>创建时间:</strong> {created_at}</p>
+        <p><strong>数据量:</strong> {total} 条</p>
+    </div>
+    
+    <h2>📋 结构化数据</h2>
+    <table>
+        <tr>{headers}</tr>
+        {rows}
+    </table>
+    
+    <h2>📄 原始HTML</h2>
+    <div class="raw-data">
+        <pre>{raw_html}</pre>
+    </div>
+    
+    <div class="footer">
+        <p>生成时间: {export_time} | Crawl4AI 采集系统</p>
+    </div>
+</body>
+</html>"""
+        
+        headers = ""
+        rows = ""
+        if structured_data:
+            keys = list(structured_data[0].keys())
+            headers = "".join([f"<th>{k}</th>" for k in keys])
+            for item in structured_data[:50]:
+                row = "".join([f"<td>{str(item.get(k, ''))}</td>" for k in keys])
+                rows += f"<tr>{row}</tr>"
+        
+        raw_html_escaped = (raw_html or '暂无原始数据').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')[:20000]
+        
+        content = template.format(
+            task_name=task.task_name or f"任务_{str(task.task_id)[:8]}",
+            task_id=task.task_id,
+            created_at=task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            total=len(structured_data),
+            headers=headers,
+            rows=rows,
+            raw_html=raw_html_escaped,
+            export_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        )
+        
+        response = HttpResponse(content, content_type='text/html')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.html"'
+        return response
+    
+    # ===== XML =====
+    elif format_type == 'xml':
+        import xml.dom.minidom as minidom
+        from xml.etree import ElementTree as ET
+        
+        root = ET.Element("results")
+        root.set("task_id", str(task.task_id))
+        root.set("total", str(len(structured_data)))
+        
+        for item in structured_data:
+            record = ET.SubElement(root, "record")
+            for key, value in item.items():
+                field = ET.SubElement(record, key)
+                field.text = str(value)
+        
+        xml_str = ET.tostring(root, encoding='unicode')
+        dom = minidom.parseString(xml_str)
+        pretty_xml = dom.toprettyxml(indent="  ")
+        
+        response = HttpResponse(pretty_xml, content_type='application/xml')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xml"'
+        return response
+    
+    # ===== SQL =====
+    elif format_type == 'sql':
+        lines = []
+        lines.append("-- 采集数据导入")
+        lines.append(f"-- 任务ID: {task.task_id}")
+        lines.append(f"-- 数据量: {len(structured_data)} 条")
+        lines.append("")
+        
+        if structured_data:
+            table_name = f"crawl_data_{str(task.task_id)[:8]}"
+            fields = list(structured_data[0].keys())
+            lines.append(f"CREATE TABLE IF NOT EXISTS {table_name} (")
+            lines.append("    id INTEGER PRIMARY KEY AUTOINCREMENT,")
+            for field in fields:
+                lines.append(f"    {field} TEXT,")
+            lines.append("    created_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+            lines.append(");")
+            lines.append("")
+            
+            for item in structured_data:
+                values = []
+                for field in fields:
+                    val = str(item.get(field, '')).replace("'", "''")
+                    values.append(f"'{val}'")
+                lines.append(f"INSERT INTO {table_name} ({', '.join(fields)}) VALUES ({', '.join(values)});")
+        
+        response = HttpResponse("\n".join(lines), content_type='text/plain')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.sql"'
+        return response
+    
+    # ===== RSS =====
+    elif format_type == 'rss':
+        rss_template = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+    <channel>
+        <title>采集结果 - {task_name}</title>
+        <link>http://localhost</link>
+        <description>采集数据订阅</description>
+        <pubDate>{pub_date}</pubDate>
+        {items}
+    </channel>
+</rss>"""
+        
+        items = []
+        for item in structured_data[:20]:
+            title = item.get('title', '未命名') or item.get('name', '未命名')
+            desc = str(item.get('content', '') or item.get('description', ''))[:200]
+            items.append(f"""
+        <item>
+            <title>{title}</title>
+            <link>{item.get('url', '')}</link>
+            <description>{desc}</description>
+            <pubDate>{datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>
+        </item>
+            """)
+        
+        content = rss_template.format(
+            task_name=task.task_name or f"任务_{str(task.task_id)[:8]}",
+            pub_date=datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+            items="".join(items)
+        )
+        
+        response = HttpResponse(content, content_type='application/rss+xml')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xml"'
+        return response
+    
+    # ===== Excel (XLSX) =====
+    elif format_type == 'xlsx':
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+        except ImportError:
+            return Response({
+                'code': 400,
+                'msg': 'Excel导出需要安装 openpyxl: pip install openpyxl',
+                'data': None
+            }, status=400)
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "采集数据"
+        
+        if structured_data:
+            headers = list(structured_data[0].keys())
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+            
+            for row, item in enumerate(structured_data, 2):
+                for col, key in enumerate(headers, 1):
+                    ws.cell(row=row, column=col, value=str(item.get(key, '')))
+        
+        # 自动调整列宽
+        for col in ws.columns:
+            max_length = max(len(str(cell.value or '')) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xlsx"'
+        return response
+    
+    else:
+        return Response({
+            'code': 400,
+            'msg': f'不支持的格式: {format_type}。支持: json, csv, xlsx, md, txt, html, xml, sql, rss',
+            'data': None
+        }, status=400)
