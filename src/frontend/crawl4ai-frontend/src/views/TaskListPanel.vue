@@ -1,61 +1,95 @@
 <template>
-  <div class="tasklist-panel" v-loading="loading">
-    <!-- 搜索区 -->
-    <div class="search-bar">
-      <el-input
-        v-model="searchKeyword"
-        placeholder="请输入任务名称搜索"
-        clearable
-        class="search-input"
-      />
-      <el-button type="primary" @click="fetchTasks">搜索</el-button>
-      <el-button @click="resetSearch">重置</el-button>
-    </div>
+  <div class="task-list-page">
+    <!-- 搜索卡片 -->
+    <el-card class="search-card" shadow="hover">
+      <div class="filters">
+        <div class="filter-row">
+          <el-input
+            v-model="searchKeyword"
+            placeholder="请输入任务名称搜索"
+            clearable
+            class="search-input"
+            @keyup.enter="fetchTasks"
+          />
+          <el-button type="primary" @click="fetchTasks">搜索</el-button>
+          <el-button @click="resetSearch">重置</el-button>
+        </div>
+        
+        <!-- ✅ 批量操作栏（与 TaskMonitor 风格一致） -->
+        <div class="batch-actions" v-if="hasRunningTasks">
+          <el-divider direction="vertical" />
+          <span class="batch-tip">批量操作：</span>
+          <el-button
+            type="danger"
+            size="small"
+            :disabled="selectedTasks.length === 0"
+            :loading="batchStopping"
+            @click="handleBatchStop"
+          >
+            ⏹️ 批量停止 ({{ selectedTasks.length }})
+          </el-button>
+          <el-button
+            type="warning"
+            size="small"
+            :loading="allStopping"
+            @click="handleStopAll"
+          >
+            ⏹️ 全部停止
+          </el-button>
+          <span class="hint-text">共 {{ runningTasksCount }} 个运行/等待中任务</span>
+        </div>
+      </div>
+    </el-card>
 
-    <!-- 横向滚动容器 -->
-    <div class="table-wrapper">
-      <el-table
-        :data="filteredTasks"
-        border
-        stripe
-        size="default"
-        class="wide-table"
-        style="table-layout:auto;"
-      >
-        <el-table-column prop="task_name" label="任务名称" min-width="150">
-          <template #default="scope">
-            <span>
-              <el-tag v-if="scope.row.task_type === 'preview'" size="small" type="warning" style="margin-right: 6px;">预览</el-tag>
-              {{ scope.row.task_name || scope.row.task_id || '未命名任务' }}
-            </span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="状态" width="100">
-          <template #default="scope">
-            <el-tag :type="getStatusType(scope.row.status)">
-              {{ getStatusText(scope.row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="创建时间" width="180">
-          <template #default="scope">
-            {{ formatTime(scope.row.created_at) }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="duration" label="采集时长" width="100" />
-        
-        <el-table-column label="数据条数" width="120">
-          <template #default="scope">
-            <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="操作" width="320">
-          <template #default="scope">
-            <!-- ✅ 停止按钮（只在运行中或暂停时显示） -->
+    <!-- 任务列表表格 -->
+    <el-table
+      :data="filteredTasks"
+      border
+      stripe
+      size="default"
+      class="task-table"
+      style="table-layout:auto;"
+      v-loading="loading"
+      @selection-change="handleSelectionChange"
+      ref="tableRef"
+    >
+      <!-- ✅ 多选列（与 TaskMonitor 一致） -->
+      <el-table-column type="selection" width="45" :selectable="checkSelectable" />
+
+      <el-table-column prop="task_name" label="任务名称" min-width="150">
+        <template #default="scope">
+          <span>
+            <el-tag v-if="scope.row.task_type === 'preview'" size="small" type="warning" style="margin-right: 6px;">预览</el-tag>
+            {{ scope.row.task_name || scope.row.task_id || '未命名任务' }}
+          </span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="状态" width="100">
+        <template #default="scope">
+          <el-tag :type="getStatusType(scope.row.status)">
+            {{ getStatusText(scope.row.status) }}
+          </el-tag>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="创建时间" width="180">
+        <template #default="scope">
+          {{ formatTime(scope.row.created_at) }}
+        </template>
+      </el-table-column>
+
+      <el-table-column prop="duration" label="采集时长" width="100" />
+
+      <el-table-column label="数据条数" width="120">
+        <template #default="scope">
+          <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="操作" width="320" fixed="right">
+        <template #default="scope">
+          <div class="op-buttons">
             <el-button 
               v-if="canStop(scope.row.status)" 
               size="small" 
@@ -68,7 +102,6 @@
             
             <el-button size="small" type="primary" @click="viewTask(scope.row)">查看</el-button>
             
-            <!-- ✅ 导出下拉菜单（只对已完成的任务显示） -->
             <el-dropdown 
               v-if="scope.row.status === 'completed' || scope.row.status === 'success'"
               @command="(format) => handleExport(scope.row, format)"
@@ -93,10 +126,10 @@
             </el-dropdown>
             
             <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+          </div>
+        </template>
+      </el-table-column>
+    </el-table>
   </div>
 </template>
 
@@ -118,7 +151,11 @@ export default {
       searchKeyword: '',
       tasks: [],
       loading: false,
-      stoppingIds: []  // ✅ 正在停止的任务ID列表（用于加载状态）
+      stoppingIds: [],
+      // ✅ 批量操作相关
+      selectedTasks: [],
+      batchStopping: false,
+      allStopping: false,
     }
   },
   computed: {
@@ -128,6 +165,18 @@ export default {
       return this.tasks.filter(task =>
         task.task_name && task.task_name.toLowerCase().includes(keyword)
       )
+    },
+    // ✅ 可停止的任务列表
+    runningTasks() {
+      return this.tasks.filter(task => this.canStop(task.status))
+    },
+    // ✅ 是否有运行中的任务
+    hasRunningTasks() {
+      return this.runningTasks.length > 0
+    },
+    // ✅ 运行中的任务数量
+    runningTasksCount() {
+      return this.runningTasks.length
     }
   },
   watch: {
@@ -148,7 +197,41 @@ export default {
       return ['pending', 'running', 'paused'].includes(status)
     },
     
-    // ✅ 停止任务
+    // ✅ 判断任务是否可选（只有可停止的任务才能被勾选）
+    checkSelectable(row) {
+      return this.canStop(row.status)
+    },
+    
+    // ✅ 表格选中变化
+    handleSelectionChange(selection) {
+      this.selectedTasks = selection
+    },
+    
+    // ✅ 执行停止（抽取公共逻辑）
+    async doStopTask(row, options = { silent: false }) {
+      try {
+        const res = await stopTask(row.task_id)
+        if (res.data.code === 200) {
+          if (!options.silent) {
+            this.$message.success(`任务「${row.task_name || row.task_id}」已停止`)
+          }
+          return true
+        } else {
+          if (!options.silent) {
+            this.$message.error(res.data.msg || '停止失败')
+          }
+          return false
+        }
+      } catch (error) {
+        if (!options.silent) {
+          console.error('停止任务失败：', error)
+          this.$message.error(`停止「${row.task_name || row.task_id}」失败：${error.message}`)
+        }
+        throw error
+      }
+    },
+    
+    // ✅ 单个停止
     async handleStop(row) {
       try {
         await this.$confirm(
@@ -158,15 +241,8 @@ export default {
         )
         
         this.stoppingIds.push(row.task_id)
-        const res = await stopTask(row.task_id)
-        
-        if (res.data.code === 200) {
-          this.$message.success('任务已停止')
-          // 刷新列表
-          await this.fetchTasks()
-        } else {
-          this.$message.error(res.data.msg || '停止失败')
-        }
+        await this.doStopTask(row)
+        await this.fetchTasks()
       } catch (error) {
         if (error !== 'cancel') {
           console.error('停止任务失败：', error)
@@ -174,6 +250,119 @@ export default {
         }
       } finally {
         this.stoppingIds = this.stoppingIds.filter(id => id !== row.task_id)
+      }
+    },
+    
+    // ✅ 批量停止
+    async handleBatchStop() {
+      if (this.selectedTasks.length === 0) {
+        this.$message.warning('请先选择要停止的任务')
+        return
+      }
+      
+      try {
+        await this.$confirm(
+          `确认停止选中的 ${this.selectedTasks.length} 个任务？\n已采集的数据会保留。`,
+          '批量停止确认',
+          { type: 'warning' }
+        )
+        
+        this.batchStopping = true
+        const tasks = [...this.selectedTasks]
+        const concurrency = 5
+        let successCount = 0
+        let failCount = 0
+        
+        for (let i = 0; i < tasks.length; i += concurrency) {
+          const batch = tasks.slice(i, i + concurrency)
+          const results = await Promise.allSettled(
+            batch.map(task => this.doStopTask(task, { silent: true }))
+          )
+          results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+              successCount++
+            } else {
+              failCount++
+            }
+          })
+        }
+        
+        this.selectedTasks = []
+        if (this.$refs.tableRef) {
+          this.$refs.tableRef.clearSelection()
+        }
+        
+        await this.fetchTasks()
+        
+        if (failCount === 0) {
+          this.$message.success(`✅ 批量停止完成：${successCount} 个任务已停止`)
+        } else {
+          this.$message.warning(`⚠️ 批量停止完成：${successCount} 个成功，${failCount} 个失败`)
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('批量停止失败：', error)
+          this.$message.error('批量停止失败')
+        }
+      } finally {
+        this.batchStopping = false
+      }
+    },
+    
+    // ✅ 全部停止
+    async handleStopAll() {
+      const runningTasks = this.runningTasks
+      if (runningTasks.length === 0) {
+        this.$message.warning('没有正在运行或等待中的任务')
+        return
+      }
+      
+      try {
+        await this.$confirm(
+          `确认停止全部 ${runningTasks.length} 个运行/等待中的任务？\n已采集的数据会保留。`,
+          '全部停止确认',
+          { type: 'warning', confirmButtonText: '全部停止' }
+        )
+        
+        this.allStopping = true
+        const tasks = [...runningTasks]
+        const concurrency = 5
+        let successCount = 0
+        let failCount = 0
+        
+        for (let i = 0; i < tasks.length; i += concurrency) {
+          const batch = tasks.slice(i, i + concurrency)
+          const results = await Promise.allSettled(
+            batch.map(task => this.doStopTask(task, { silent: true }))
+          )
+          results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+              successCount++
+            } else {
+              failCount++
+            }
+          })
+        }
+        
+        this.selectedTasks = []
+        if (this.$refs.tableRef) {
+          this.$refs.tableRef.clearSelection()
+        }
+        
+        await this.fetchTasks()
+        
+        if (failCount === 0) {
+          this.$message.success(`✅ 全部停止完成：${successCount} 个任务已停止`)
+        } else {
+          this.$message.warning(`⚠️ 全部停止完成：${successCount} 个成功，${failCount} 个失败`)
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('全部停止失败：', error)
+          this.$message.error('全部停止失败')
+        }
+      } finally {
+        this.allStopping = false
       }
     },
     
@@ -185,7 +374,6 @@ export default {
           spinner: 'el-icon-loading'
         })
         
-        // 调用导出API
         const response = await fetch(
           `/api/tasks/${row.task_id}/export/?format=${format}`,
           {
@@ -202,7 +390,6 @@ export default {
           throw new Error(errorData.detail || errorData.msg || '导出失败')
         }
         
-        // 获取文件名
         const contentDisposition = response.headers.get('Content-Disposition')
         let filename = `task_${row.task_id}.${format}`
         if (contentDisposition) {
@@ -210,7 +397,6 @@ export default {
           if (match) filename = match[1]
         }
         
-        // 下载文件
         const blob = await response.blob()
         const link = document.createElement('a')
         link.href = URL.createObjectURL(blob)
@@ -264,23 +450,32 @@ export default {
     
     resetSearch() {
       this.searchKeyword = ''
+      // ✅ 清空选中
+      this.selectedTasks = []
+      if (this.$refs.tableRef) {
+        this.$refs.tableRef.clearSelection()
+      }
     },
     
     viewTask(row) {
-  // 使用 task_id 跳转
-  const taskId = row.task_id || row.id
-  if (taskId) {
-    this.$router.push(`/task/${taskId}`)
-  } else {
-    this.$message.error('任务ID不存在')
-  }
-},
+      const taskId = row.task_id || row.id
+      if (taskId) {
+        this.$router.push(`/task/${taskId}`)
+      } else {
+        this.$message.error('任务ID不存在')
+      }
+    },
     
     async handleDelete(row) {
       try {
         await this.$confirm(`确认删除任务【${row.task_name || row.task_id}】？`, '删除确认', { type: 'warning' })
         await deleteTask(row.task_id)
         this.$message.success('删除成功')
+        // ✅ 清空选中
+        this.selectedTasks = []
+        if (this.$refs.tableRef) {
+          this.$refs.tableRef.clearSelection()
+        }
         this.fetchTasks()
       } catch (error) {
         if (error !== 'cancel') {
@@ -337,29 +532,96 @@ export default {
 </script>
 
 <style scoped>
-.tasklist-panel {
+/* ✅ 统一风格，与 TaskMonitor 一致 */
+.task-list-page {
+  padding: 20px;
   width: 100%;
-  margin: 0 auto;
-  padding: 20px 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
-.search-bar {
-  display: flex;
-  justify-content: flex-start;
-  gap: 16px;
+.search-card {
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   margin-bottom: 20px;
+  padding: 20px;
+  background-color: #fff;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .search-input {
-  width: 300px;
+  width: 280px;
 }
 
-.table-wrapper {
-  width: 100%;
-  overflow-x: auto;
+/* ✅ 批量操作栏样式 */
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px 0;
 }
 
-.wide-table {
+.batch-tip {
+  font-size: 13px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 4px;
+}
+
+.task-table {
+  border: 1px solid #eee;
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  background-color: #fff;
   width: 100%;
+  box-sizing: border-box;
+}
+
+.task-table th {
+  background-color: #fafafa;
+  font-weight: 600;
+  color: #333;
+}
+
+.task-table td {
+  background-color: #fff;
+  word-break: break-word;
+}
+
+.task-table .el-table__row:hover {
+  background-color: #f5f7fa;
+}
+
+/* ✅ 操作按钮容器 */
+.op-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.op-buttons .el-button {
+  margin: 0;
 }
 </style>
