@@ -5,7 +5,7 @@
       <el-button @click="goBack" type="text">
         <el-icon><ArrowLeft /></el-icon> 返回任务列表
       </el-button>
-      <h2>📋 任务详情</h2>
+      <h2>任务详情</h2>
     </div>
 
     <!-- 任务基本信息 -->
@@ -73,6 +73,7 @@ export default {
     return {
       taskId: null,
       taskInfo: {},
+      templateId: null,  // ✅ 新增：保存模板ID
       loading: false
     }
   },
@@ -115,6 +116,7 @@ export default {
         const res = await getTaskDetail(this.taskId)
         if (res.data.code === 200) {
           this.taskInfo = res.data.data || {}
+          this.templateId = this.taskInfo.template_id || null  // ✅ 保存模板ID
         }
       } catch (error) {
         console.error('获取任务详情失败:', error)
@@ -124,7 +126,16 @@ export default {
       }
     },
     goBack() {
-      this.$router.push('/tasks')
+      // ✅ 如果有模板ID，返回模板详情页的任务列表
+      if (this.templateId) {
+        this.$router.push({
+          path: `/template/${this.templateId}`,
+          query: { tab: 'tasks' }
+        })
+      } else {
+        // 兜底：没有模板ID时返回全局任务列表
+        this.$router.push('/tasks')
+      }
     },
     formatTime(timeStr) {
       if (!timeStr) return '-'

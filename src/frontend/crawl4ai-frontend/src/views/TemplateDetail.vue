@@ -375,8 +375,14 @@ xpathToCss(xpath) {
     }
   },
   mounted() {
-    this.fetchDetail()
+  this.fetchDetail()
+  
+  // ✅ 如果 URL 中有 tab 参数，切换到对应 Tab
+  const tab = this.$route.query.tab
+  if (tab && ['config', 'overview', 'tasks', 'stats'].includes(tab)) {
+    this.activeTab = tab
   }
+},
 }
 </script>
 
