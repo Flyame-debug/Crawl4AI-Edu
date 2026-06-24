@@ -765,12 +765,54 @@ def fetch_data(url):
   flex-direction: column;
   gap: 12px;
 }
+
+/* ===== 提取指令行 ===== */
 .prompt-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;                /* 按钮与输入框更紧凑 */
+  margin-bottom: 2px;
+  padding: 4px 6px;        /* 缩小左右内边距，让输入框更宽 */
+  background: rgba(255,255,255,0.5);
+  border-radius: 10px;
+  transition: all 0.25s;
 }
+.prompt-row:hover {
+  background: rgba(255,255,255,0.8);
+  box-shadow: 0 2px 8px rgba(64,158,255,0.06);
+}
+.prompt-row .el-input {
+  flex: 1;
+}
+
+/* 删除按钮：红色，更紧凑 */
+.prompt-row .el-button {
+  color: #f56c6c;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.25s;
+  height: 34px;
+  flex-shrink: 0;
+}
+.prompt-row .el-button:hover {
+  color: #e04040;
+  background: rgba(245,108,108,0.08);
+}
+
+/* ===== 新增指令按钮（与指令行左边缘对齐，高度一致） ===== */
+.form-block > .el-button--primary.el-button--small {
+  border-radius: 8px;
+  padding: 6px 18px;
+  height: 36px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  transition: all 0.3s;
+  align-self: flex-start;
+  margin-left: 6px;        /* 与 prompt-row 的 padding-left 对齐 */
+  margin-top: 2px;
+}
+
 .timeout-row {
   display: flex;
   align-items: center;
@@ -893,27 +935,22 @@ def fetch_data(url):
   min-height: 300px;
   padding: 20px;
 }
-
 .loading-spinner {
   margin-bottom: 20px;
 }
-
 .loading-text {
   text-align: center;
 }
-
 .loading-text h3 {
   color: #303133;
   font-size: 18px;
   margin: 0 0 8px 0;
 }
-
 .loading-text p {
   color: #909399;
   font-size: 14px;
   margin: 4px 0;
 }
-
 .progress-bar {
   width: 300px;
   height: 8px;
@@ -922,19 +959,16 @@ def fetch_data(url):
   margin: 12px auto;
   overflow: hidden;
 }
-
 .progress-fill {
   height: 100%;
   background: linear-gradient(90deg, #409EFF, #67C23A);
   border-radius: 4px;
   transition: width 0.5s ease;
 }
-
 .progress-text {
   font-size: 13px;
   color: #909399;
 }
-
 .hint-text {
   font-size: 12px;
   color: #c0c4cc;
@@ -953,24 +987,20 @@ def fetch_data(url):
   border-bottom: 1px solid #e4e7ed;
   margin-bottom: 16px;
 }
-
 .result-info {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .data-count {
   font-size: 16px;
   font-weight: 600;
   color: #303133;
 }
-
 .result-actions {
   display: flex;
   gap: 8px;
 }
-
 .no-data-placeholder {
   padding: 40px 0;
 }
