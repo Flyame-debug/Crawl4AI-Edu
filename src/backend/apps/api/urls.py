@@ -85,4 +85,5 @@ urlpatterns = [
     path('tasks/<str:task_id>/preview/', views.task_preview_api, name='task_preview'),
     path('tasks/<str:task_id>/download/', views.task_download_api, name='task_download'),
     path('tasks/<str:task_id>/export/', views.task_export_api, name='task_export'),
+    path('tasks/<str:task_id>/link-template/', views.link_task_template, name='link_task_template'),
 ]

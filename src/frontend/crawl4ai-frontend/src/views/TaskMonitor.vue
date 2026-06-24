@@ -30,11 +30,45 @@
           <el-button type="primary" @click="fetchTasks" style="margin-left: 10px;">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </div>
+        
+        <!-- ✅ 批量操作栏 -->
+        <div class="batch-actions" v-if="hasRunningTasks">
+          <el-divider direction="vertical" />
+          <span class="batch-tip">批量操作：</span>
+          <el-button
+            type="danger"
+            size="small"
+            :disabled="selectedTasks.length === 0"
+            :loading="batchStopping"
+            @click="handleBatchStop"
+          >
+            ⏹️ 批量停止 ({{ selectedTasks.length }})
+          </el-button>
+          <el-button
+            type="warning"
+            size="small"
+            :loading="allStopping"
+            @click="handleStopAll"
+          >
+            ⏹️ 全部停止
+          </el-button>
+          <span class="hint-text">共 {{ runningTasksCount }} 个运行/等待中任务</span>
+        </div>
       </div>
     </el-card>
 
     <!-- 任务列表表格 -->
-    <el-table :data="displayTasks" class="task-table" empty-text="暂无任务" v-loading="loading">
+    <el-table 
+      :data="displayTasks" 
+      class="task-table" 
+      empty-text="暂无任务" 
+      v-loading="loading"
+      @selection-change="handleSelectionChange"
+      ref="tableRef"
+    >
+      <!-- ✅ 多选列 -->
+      <el-table-column type="selection" width="45" :selectable="checkSelectable" />
+      
       <el-table-column prop="task_name" label="任务名称" min-width="150">
         <template #default="scope">
           <span>
@@ -43,6 +77,26 @@
           </span>
         </template>
       </el-table-column>
+      <!-- 在数据条数列之后、操作列之前插入 -->
+<el-table-column prop="template_name" label="关联模板" min-width="120">
+  <template #default="scope">
+    <span v-if="scope.row.template_id">
+      <el-tag size="small" type="success">{{ scope.row.template_name || '模板' }}</el-tag>
+    </span>
+    <span v-else style="color: #909399; font-size: 12px;">
+      未关联
+      <el-button 
+        size="small" 
+        type="primary" 
+        link
+        @click="showLinkTemplateDialog(scope.row)"
+        style="margin-left: 4px;"
+      >
+        关联
+      </el-button>
+    </span>
+  </template>
+</el-table-column>
       <el-table-column prop="created_at" label="执行时间" min-width="160">
         <template #default="scope">
           <span>{{ formatTime(scope.row.created_at) }}</span>
@@ -66,29 +120,26 @@
             <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
             <el-button size="small" @click="viewLog(scope.row)">日志</el-button>
             
-            <!-- ✅ 重新执行按钮 -->
             <el-button 
               size="small"
               type="warning"
               @click="rerunTask(scope.row)"
-              :disabled="!scope.row.template_id"
+              :disabled="!scope.row.template_id && scope.row.task_type === 'preview'"
               :title="!scope.row.template_id ? '缺少关联模板，无法重新执行' : ''"
             >
               🔄 重新执行
             </el-button>
 
-            <!-- 停止按钮 -->
-  <el-button
-    v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
-    size="small"
-    type="danger"
-    @click="stopRunningTask(scope.row)"
-    :loading="stoppingIds.includes(scope.row.task_id)"
-  >
-    停止
-  </el-button>
+            <el-button
+              v-if="canStop(scope.row.status)"
+              size="small"
+              type="danger"
+              @click="stopRunningTask(scope.row)"
+              :loading="stoppingIds.includes(scope.row.task_id)"
+            >
+              停止
+            </el-button>
             
-            <!-- ✅ 导出下拉菜单 -->
             <el-dropdown @command="(format) => exportTask(scope.row, format)">
               <el-button size="small" type="primary">
                 导出 <el-icon><ArrowDown /></el-icon>
@@ -111,6 +162,41 @@
         </template>
       </el-table-column>
     </el-table>
+    <!-- 在任务列表表格下方添加 -->
+<el-dialog
+  v-model="linkTemplateDialogVisible"
+  title="关联模板"
+  width="500px"
+  :close-on-click-modal="false"
+>
+  <el-form :model="linkForm" label-width="80px">
+    <el-form-item label="任务">
+      <span>{{ linkForm.task_name || linkForm.task_id }}</span>
+    </el-form-item>
+    <el-form-item label="选择模板">
+      <el-select 
+        v-model="linkForm.template_id" 
+        placeholder="请选择模板"
+        filterable
+        style="width: 100%;"
+      >
+        <el-option
+          v-for="tpl in templateOptions"
+          :key="tpl.id"
+          :label="tpl.name"
+          :value="tpl.id"
+        />
+      </el-select>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="linkTemplateDialogVisible = false">取消</el-button>
+    <el-button type="primary" :loading="linkTemplateLoading" @click="confirmLinkTemplate">
+      确认关联
+    </el-button>
+  </template>
+</el-dialog>
+
 
     <!-- 预览结果弹窗 -->
     <el-dialog
@@ -131,7 +217,7 @@
 <script>
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getTasks, getTaskDetail, startTask, stopTask, getTaskPreview } from '@/api/tasks'
+import { getTasks, getTaskDetail, startTask, stopTask, getTaskPreview, linkTaskTemplate, getTemplates } from '@/api/tasks'
 import { getTaskLogs } from '@/api/logs'
 import { marked } from 'marked'
 import * as XLSX from 'xlsx'
@@ -148,24 +234,45 @@ export default {
         status: '',
         dateRange: [],
         includePreview: false,
-        
       },
-      stoppingIds:[],
+      stoppingIds: [],
+      selectedTasks: [],
+      batchStopping: false,
+      allStopping: false,
       detailDialogVisible: false,
       detailLoading: false,
-      detailHtml: ''
+      detailHtml: '',
+      // 关联模板相关
+      linkTemplateDialogVisible: false,
+      linkTemplateLoading: false,
+      linkForm: {
+        task_id: '',
+        task_name: '',
+        template_id: ''
+      },
+      templateOptions: [],
     }
   },
   computed: {
     displayTasks() {
       if (this.filters.includePreview) return this.tasks
       return this.tasks.filter(task => task.task_type !== 'preview')
+    },
+    runningTasks() {
+      return this.tasks.filter(task => this.canStop(task.status))
+    },
+    hasRunningTasks() {
+      return this.runningTasks.length > 0
+    },
+    runningTasksCount() {
+      return this.runningTasks.length
     }
   },
   mounted() {
     this.fetchTasks()
   },
   methods: {
+    // ========== 任务列表 ==========
     async fetchTasks() {
       this.loading = true
       try {
@@ -215,9 +322,14 @@ export default {
     
     resetFilters() {
       this.filters = { type: '', status: '', dateRange: [], includePreview: false }
+      this.selectedTasks = []
+      if (this.$refs.tableRef) {
+        this.$refs.tableRef.clearSelection()
+      }
       this.fetchTasks()
     },
     
+    // ========== 状态判断 ==========
     getStatusText(status) {
       const map = {
         'pending': '⏳ 等待中',
@@ -244,138 +356,346 @@ export default {
       return map[status] || 'info'
     },
     
-    // ✅ 停止任务
+    canStop(status) {
+      return ['pending', 'running', 'paused'].includes(status)
+    },
+    
+    checkSelectable(row) {
+      return this.canStop(row.status)
+    },
+    
+    handleSelectionChange(selection) {
+      this.selectedTasks = selection
+    },
+    
+    // ========== 核心停止逻辑 ==========
+    async doStopTask(row, options = { silent: false }) {
+      try {
+        const res = await stopTask(row.task_id)
+        if (res.data.code === 200) {
+          if (!options.silent) {
+            ElMessage.success(`任务「${row.task_name || row.task_id}」已停止`)
+          }
+          return true
+        } else {
+          if (!options.silent) {
+            ElMessage.error(res.data.msg || '停止失败')
+          }
+          return false
+        }
+      } catch (error) {
+        if (!options.silent) {
+          console.error('停止任务失败：', error)
+          ElMessage.error(`停止「${row.task_name || row.task_id}」失败：${error.message}`)
+        }
+        throw error
+      }
+    },
+    
     async stopRunningTask(task) {
-  // ✅ 获取正确的 task_id
-  const taskId = task.task_id || task.id
-  if (!taskId) {
-    ElMessage.error('任务ID不存在')
-    return
-  }
-  
-  let message = `确认停止任务【${task.task_name || taskId}】？`
-  if (task.task_type === 'preview') {
-    message += '\n⚠️ 预览任务停止后，已采集的数据会保留。'
-  }
-  
-  try {
-    await this.$confirm(message, '停止确认', { type: 'warning' })
-    
-    this.stoppingIds.push(taskId)
-    const res = await stopTask(taskId)
-    
-    if (res.data.code === 200) {
-      this.$message.success('任务已停止')
-      this.fetchTasks()
-    } else {
-      this.$message.error(res.data.msg || '停止失败')
-    }
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('停止任务失败：', error)
-      this.$message.error('停止失败：' + (error.message || '未知错误'))
-    }
-  } finally {
-    this.stoppingIds = this.stoppingIds.filter(id => id !== taskId)
-  }
-},
-
-    // ✅ 重新执行任务（修复版）
-    // TaskMonitor.vue - rerunTask 方法
-async rerunTask(task) {
-  if (!task.template_id) {
-    ElMessage.warning('该任务没有关联模板，无法重新执行')
-    return
-  }
-  
-  try {
-    await ElMessageBox.confirm('确认重新执行？', '提示', { type: 'info' })
-    
-    const res = await startTask({
-      template_id: task.template_id,  // ✅ 直接传递模板ID
-      task_type: task.task_type || 'formal',
-      config: {
-        max_depth: 2,
-        max_concurrent: 5
+      const taskId = task.task_id || task.id
+      if (!taskId) {
+        ElMessage.error('任务ID不存在')
+        return
       }
-    })
+      
+      let message = `确认停止任务【${task.task_name || taskId}】？`
+      if (task.task_type === 'preview') {
+        message += '\n⚠️ 预览任务停止后，已采集的数据会保留。'
+      }
+      
+      try {
+        await this.$confirm(message, '停止确认', { type: 'warning' })
+        this.stoppingIds.push(taskId)
+        await this.doStopTask(task)
+        await this.fetchTasks()
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('停止任务失败：', error)
+          ElMessage.error('停止失败：' + (error.message || '未知错误'))
+        }
+      } finally {
+        this.stoppingIds = this.stoppingIds.filter(id => id !== taskId)
+      }
+    },
     
-    if (res.data.code === 200) {
-      ElMessage.success('任务已重新启动')
-      this.fetchTasks()
-    }
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('重新执行失败:', error)
-      ElMessage.error('重新执行失败')
-    }
-  }
-},
+    async handleBatchStop() {
+      if (this.selectedTasks.length === 0) {
+        ElMessage.warning('请先选择要停止的任务')
+        return
+      }
+      
+      try {
+        await this.$confirm(
+          `确认停止选中的 ${this.selectedTasks.length} 个任务？\n已采集的数据会保留。`,
+          '批量停止确认',
+          { type: 'warning' }
+        )
+        
+        this.batchStopping = true
+        const tasks = [...this.selectedTasks]
+        
+        const concurrency = 5
+        let successCount = 0
+        let failCount = 0
+        
+        for (let i = 0; i < tasks.length; i += concurrency) {
+          const batch = tasks.slice(i, i + concurrency)
+          const results = await Promise.allSettled(
+            batch.map(task => this.doStopTask(task, { silent: true }))
+          )
+          results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+              successCount++
+            } else {
+              failCount++
+            }
+          })
+        }
+        
+        this.selectedTasks = []
+        if (this.$refs.tableRef) {
+          this.$refs.tableRef.clearSelection()
+        }
+        
+        await this.fetchTasks()
+        
+        if (failCount === 0) {
+          ElMessage.success(`✅ 批量停止完成：${successCount} 个任务已停止`)
+        } else {
+          ElMessage.warning(`⚠️ 批量停止完成：${successCount} 个成功，${failCount} 个失败`)
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('批量停止失败：', error)
+          ElMessage.error('批量停止失败')
+        }
+      } finally {
+        this.batchStopping = false
+      }
+    },
+    
+    async handleStopAll() {
+      const runningTasks = this.runningTasks
+      if (runningTasks.length === 0) {
+        ElMessage.warning('没有正在运行或等待中的任务')
+        return
+      }
+      
+      try {
+        await this.$confirm(
+          `确认停止全部 ${runningTasks.length} 个运行/等待中的任务？\n已采集的数据会保留。`,
+          '全部停止确认',
+          { type: 'warning', confirmButtonText: '全部停止' }
+        )
+        
+        this.allStopping = true
+        const tasks = [...runningTasks]
+        
+        const concurrency = 5
+        let successCount = 0
+        let failCount = 0
+        
+        for (let i = 0; i < tasks.length; i += concurrency) {
+          const batch = tasks.slice(i, i + concurrency)
+          const results = await Promise.allSettled(
+            batch.map(task => this.doStopTask(task, { silent: true }))
+          )
+          results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+              successCount++
+            } else {
+              failCount++
+            }
+          })
+        }
+        
+        this.selectedTasks = []
+        if (this.$refs.tableRef) {
+          this.$refs.tableRef.clearSelection()
+        }
+        
+        await this.fetchTasks()
+        
+        if (failCount === 0) {
+          ElMessage.success(`✅ 全部停止完成：${successCount} 个任务已停止`)
+        } else {
+          ElMessage.warning(`⚠️ 全部停止完成：${successCount} 个成功，${failCount} 个失败`)
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('全部停止失败：', error)
+          ElMessage.error('全部停止失败')
+        }
+      } finally {
+        this.allStopping = false
+      }
+    },
 
+    // ========== 关联模板 ==========
+    async showLinkTemplateDialog(task) {
+      this.linkForm.task_id = task.task_id
+      this.linkForm.task_name = task.task_name || task.task_id
+      this.linkForm.template_id = ''
+      
+      try {
+        const res = await getTemplates({ page: 1, page_size: 100 })
+        if (res.data.code === 200) {
+          this.templateOptions = res.data.data.results || []
+        } else {
+          ElMessage.error(res.data.msg || '获取模板列表失败')
+          return
+        }
+      } catch (error) {
+        console.error('加载模板列表失败:', error)
+        ElMessage.error('加载模板列表失败')
+        return
+      }
+      
+      this.linkTemplateDialogVisible = true
+    },
+    
+    async confirmLinkTemplate() {
+      if (!this.linkForm.template_id) {
+        ElMessage.warning('请选择模板')
+        return
+      }
+      
+      this.linkTemplateLoading = true
+      try {
+        const res = await linkTaskTemplate(
+          this.linkForm.task_id,
+          this.linkForm.template_id
+        )
+        if (res.data.code === 200) {
+          ElMessage.success('关联模板成功')
+          this.linkTemplateDialogVisible = false
+          await this.fetchTasks()
+        } else {
+          ElMessage.error(res.data.msg || '关联失败')
+        }
+      } catch (error) {
+        console.error('关联模板失败:', error)
+        ElMessage.error('关联模板失败')
+      } finally {
+        this.linkTemplateLoading = false
+      }
+    },
+
+    // ========== 重新执行 ==========
+    async rerunTask(task) {
+      let templateId = task.template_id
+      
+      if (!templateId && task.template) {
+        templateId = task.template.id
+      }
+      
+      if (!templateId) {
+        ElMessageBox.confirm(
+          '该任务没有关联模板，无法重新执行。是否现在关联模板？',
+          '提示',
+          { 
+            type: 'warning',
+            confirmButtonText: '去关联',
+            cancelButtonText: '取消'
+          }
+        ).then(() => {
+          this.showLinkTemplateDialog(task)
+        }).catch(() => {})
+        return
+      }
+      
+      try {
+        await ElMessageBox.confirm(
+          `确认重新执行任务「${task.task_name || task.task_id}」？`,
+          '重新执行确认',
+          { type: 'info' }
+        )
+        
+        const res = await startTask({
+          template_id: templateId,
+          task_type: task.task_type || 'formal',
+          config: {
+            max_depth: 2,
+            max_concurrent: 5
+          }
+        })
+        
+        if (res.data.code === 200) {
+          ElMessage.success('任务已重新启动')
+          await this.fetchTasks()
+        } else {
+          ElMessage.error(res.data.msg || '启动失败')
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('重新执行失败:', error)
+          ElMessage.error('重新执行失败：' + (error.message || '未知错误'))
+        }
+      }
+    },
+
+    // ========== 详情 & 日志 ==========
     async viewDetail(task) {
-  // ✅ 获取正确的 task_id
-  const taskId = task.task_id || task.id
-  if (!taskId) {
-    ElMessage.error('任务ID不存在')
-    return
-  }
-  
-  this.detailLoading = true
-  this.detailDialogVisible = true
-  try {
-    const res = await getTaskDetail(taskId)
-    if (res.data.code === 200) {
-      const data = res.data.data || {}
-      const markdownContent = data.extracted_data || ''
-      if (markdownContent && typeof markdownContent === 'string') {
-        this.detailHtml = marked(markdownContent)
-      } else {
-        this.detailHtml = `<pre>${JSON.stringify(data, null, 2)}</pre>`
+      const taskId = task.task_id || task.id
+      if (!taskId) {
+        ElMessage.error('任务ID不存在')
+        return
       }
-    } else {
-      this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
-    }
-  } catch (error) {
-    console.error('获取任务详情失败:', error)
-    this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
-  } finally {
-    this.detailLoading = false
-  }
-},
+      this.detailLoading = true
+      this.detailDialogVisible = true
+      try {
+        const res = await getTaskDetail(taskId)
+        if (res.data.code === 200) {
+          const data = res.data.data || {}
+          const markdownContent = data.extracted_data || ''
+          if (markdownContent && typeof markdownContent === 'string') {
+            this.detailHtml = marked(markdownContent)
+          } else {
+            this.detailHtml = `<pre>${JSON.stringify(data, null, 2)}</pre>`
+          }
+        } else {
+          this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
+        }
+      } catch (error) {
+        console.error('获取任务详情失败:', error)
+        this.detailHtml = `<pre>${JSON.stringify(task, null, 2)}</pre>`
+      } finally {
+        this.detailLoading = false
+      }
+    },
     
     async viewLog(task) {
-  try {
-    // ✅ 获取正确的 task_id
-    const taskId = task.task_id || task.id
-    if (!taskId) {
-      ElMessage.error('任务ID不存在')
-      return
-    }
-    
-    const res = await getTaskLogs(taskId, 200)
-    if (res.data && res.data.code === 200) {
-      const logs = res.data.data.logs || []
-      if (logs.length > 0) {
-        const logContent = logs.join('\n')
+      const taskId = task.task_id || task.id
+      if (!taskId) {
+        ElMessage.error('任务ID不存在')
+        return
+      }
+      try {
+        const res = await getTaskLogs(taskId, 200)
+        if (res.data && res.data.code === 200) {
+          const logs = res.data.data.logs || []
+          if (logs.length > 0) {
+            const logContent = logs.join('\n')
+            ElMessageBox.alert(
+              `<pre style="max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;line-height:1.6;">${logContent}</pre>`,
+              `📋 任务日志 - ${task.task_name || taskId}`,
+              { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
+            )
+            return
+          }
+        }
         ElMessageBox.alert(
-          `<pre style="max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;line-height:1.6;">${logContent}</pre>`,
+          `<div style="padding:20px;text-align:center;color:#909399;">暂无日志</div>`,
           `📋 任务日志 - ${task.task_name || taskId}`,
           { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
         )
-        return
+      } catch (error) {
+        console.error('查看日志失败:', error)
+        ElMessage.error('查看日志失败')
       }
-    }
-    ElMessageBox.alert(
-      `<div style="padding:20px;text-align:center;color:#909399;">暂无日志</div>`,
-      `📋 任务日志 - ${task.task_name || taskId}`,
-      { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
-    )
-  } catch (error) {
-    console.error('查看日志失败:', error)
-    ElMessage.error('查看日志失败')
-  }
-},
-  
+    },
+
     // ===== 导出功能 =====
     async exportTask(task, format) {
       try {
@@ -384,12 +704,10 @@ async rerunTask(task) {
           ElMessage.error('任务ID缺失')
           return
         }
-    
         if (task.task_type === 'preview') {
           ElMessage.warning('预览任务不支持导出')
           return
         }
-        
         const res = await getTaskPreview(taskId, 1000)
         if (!res || !res.data || res.data.code !== 200) {
           ElMessage.error('获取任务数据失败')
@@ -499,7 +817,6 @@ async rerunTask(task) {
       data.forEach(row => {
         xml += '  <record>\n'
         Object.entries(row).forEach(([k, v]) => {
-          // ✅ 确保XML特殊字符被转义
           const value = String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           xml += `    <${k}>${value}</${k}>\n`
         })
@@ -659,6 +976,26 @@ async rerunTask(task) {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+/* ✅ 批量操作栏样式 */
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px 0;
+}
+.batch-tip {
+  font-size: 13px;
+  color: #606266;
+  font-weight: 500;
+}
+.hint-text {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 4px;
+}
+
 .task-table {
   border: 1px solid #eee;
   border-radius: 14px;
