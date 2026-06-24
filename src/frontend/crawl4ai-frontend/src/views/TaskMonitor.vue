@@ -7,11 +7,11 @@
           <el-checkbox v-model="filters.includePreview" @change="fetchTasks">
             显示预览任务
           </el-checkbox>
-          <el-select v-model="filters.type" placeholder="任务类型" style="width: 160px; margin-right: 10px;">
+          <el-select v-model="filters.type" placeholder="任务类型" style="width: 130px; margin-right: 8px;">
             <el-option label="正式采集" value="formal" />
             <el-option label="预览采集" value="preview" />
           </el-select>
-          <el-select v-model="filters.status" placeholder="状态" style="width: 160px; margin-right: 10px;">
+          <el-select v-model="filters.status" placeholder="状态" style="width: 130px; margin-right: 8px;">
             <el-option label="等待中" value="pending" />
             <el-option label="采集中" value="running" />
             <el-option label="已完成" value="completed" />
@@ -27,7 +27,7 @@
             end-placeholder="结束日期"
             class="short-date-picker"
           />
-          <el-button type="primary" @click="fetchTasks" style="margin-left: 10px;">查询</el-button>
+          <el-button type="primary" @click="fetchTasks" style="margin-left: 8px;">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </div>
         
@@ -198,7 +198,7 @@
 </el-dialog>
 
 
-    <!-- 预览结果弹窗 -->
+    <!-- 预览结果弹窗（不变） -->
     <el-dialog
       v-model="detailDialogVisible"
       title="任务详情"
@@ -952,9 +952,8 @@ export default {
 .task-list-page {
   padding: 20px;
   width: 100%;
-  max-width: 100%;
   box-sizing: border-box;
-  overflow-x: hidden;
+  overflow-x: hidden;   /* 关键：阻止页面级横向溢出 */
 }
 .search-card {
   border-radius: 14px;
@@ -974,7 +973,14 @@ export default {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+}
+
+/* 表格滚动容器 */
+.table-scroll-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 14px;
 }
 
 /* ✅ 批量操作栏样式 */
@@ -998,27 +1004,34 @@ export default {
 
 .task-table {
   border: 1px solid #eee;
-  border-radius: 14px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   background-color: #fff;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
   box-sizing: border-box;
+  border-radius: 14px;
 }
 .task-table th {
   background-color: #fafafa;
   font-weight: 600;
   color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-table td {
   background-color: #fff;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-table .el-table__row:hover {
   background-color: #f5f7fa;
 }
 .op-buttons {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -1026,8 +1039,7 @@ export default {
   margin: 0;
 }
 .short-date-picker {
-  width: 120px !important;
-  margin-right: 10px;
+  width: 110px !important;
 }
 .markdown-body {
   padding: 10px;
