@@ -26,13 +26,6 @@
       <el-table-column prop="desc" label="说明" />
     </el-table>
 
-    <!-- 示例响应截图（暂留占位） -->
-    <div class="example-box">
-      <div class="example">
-        <img src="https://via.placeholder.com/400x200?text=示例截图" alt="示例响应截图" />
-        <p class="hint">这里将展示采集到的真实截图，当前为占位图</p>
-      </div>
-    </div>
   </div>
 </template>
 
