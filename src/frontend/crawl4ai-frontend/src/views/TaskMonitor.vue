@@ -7,11 +7,11 @@
           <el-checkbox v-model="filters.includePreview" @change="fetchTasks">
             显示预览任务
           </el-checkbox>
-          <el-select v-model="filters.type" placeholder="任务类型" style="width: 160px; margin-right: 10px;">
+          <el-select v-model="filters.type" placeholder="任务类型" style="width: 130px; margin-right: 8px;">
             <el-option label="正式采集" value="formal" />
             <el-option label="预览采集" value="preview" />
           </el-select>
-          <el-select v-model="filters.status" placeholder="状态" style="width: 160px; margin-right: 10px;">
+          <el-select v-model="filters.status" placeholder="状态" style="width: 130px; margin-right: 8px;">
             <el-option label="等待中" value="pending" />
             <el-option label="采集中" value="running" />
             <el-option label="已完成" value="completed" />
@@ -27,92 +27,90 @@
             end-placeholder="结束日期"
             class="short-date-picker"
           />
-          <el-button type="primary" @click="fetchTasks" style="margin-left: 10px;">查询</el-button>
+          <el-button type="primary" @click="fetchTasks" style="margin-left: 8px;">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
         </div>
       </div>
     </el-card>
 
-    <!-- 任务列表表格 -->
-    <el-table :data="displayTasks" class="task-table" empty-text="暂无任务" v-loading="loading">
-      <el-table-column prop="task_name" label="任务名称" min-width="150">
-        <template #default="scope">
-          <span>
-            <el-tag v-if="scope.row.task_type === 'preview'" size="small" type="warning" style="margin-right: 6px;">预览</el-tag>
-            {{ scope.row.task_name || scope.row.task_id || '未命名任务' }}
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="执行时间" min-width="160">
-        <template #default="scope">
-          <span>{{ formatTime(scope.row.created_at) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="status" label="状态" min-width="100">
-        <template #default="scope">
-          <el-tag :type="getStatusType(scope.row.status)">
-            {{ getStatusText(scope.row.status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="total_pages" label="数据条数" min-width="100">
-        <template #default="scope">
-          <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" min-width="420" fixed="right">
-        <template #default="scope">
-          <div class="op-buttons">
-            <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
-            <el-button size="small" @click="viewLog(scope.row)">日志</el-button>
-            
-            <!-- ✅ 重新执行按钮 -->
-            <el-button 
-              size="small"
-              type="warning"
-              @click="rerunTask(scope.row)"
-              :disabled="!scope.row.template_id"
-              :title="!scope.row.template_id ? '缺少关联模板，无法重新执行' : ''"
-            >
-              🔄 重新执行
-            </el-button>
-
-            <!-- 停止按钮 -->
-  <el-button
-    v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
-    size="small"
-    type="danger"
-    @click="stopRunningTask(scope.row)"
-    :loading="stoppingIds.includes(scope.row.task_id)"
-  >
-    停止
-  </el-button>
-            
-            <!-- ✅ 导出下拉菜单 -->
-            <el-dropdown @command="(format) => exportTask(scope.row, format)">
-              <el-button size="small" type="primary">
-                导出 <el-icon><ArrowDown /></el-icon>
+    <!-- 任务列表表格（外层加滚动容器） -->
+    <div class="table-scroll-wrapper">
+      <el-table :data="displayTasks" class="task-table" empty-text="暂无任务" v-loading="loading">
+        <!-- 关键修改：min-width 全部改为 width -->
+        <el-table-column prop="task_name" label="任务名称" width="120" show-overflow-tooltip>
+          <template #default="scope">
+            <span>
+              <el-tag v-if="scope.row.task_type === 'preview'" size="small" type="warning" style="margin-right: 6px;">预览</el-tag>
+              {{ scope.row.task_name || scope.row.task_id || '未命名任务' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="执行时间" width="140" show-overflow-tooltip>
+          <template #default="scope">
+            <span>{{ formatTime(scope.row.created_at) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="80" show-overflow-tooltip>
+          <template #default="scope">
+            <el-tag :type="getStatusType(scope.row.status)">
+              {{ getStatusText(scope.row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_pages" label="数据条数" width="80" show-overflow-tooltip>
+          <template #default="scope">
+            <span>{{ scope.row.success_pages || 0 }} / {{ scope.row.total_pages || 0 }}</span>
+          </template>
+        </el-table-column>
+        <!-- 操作列 width 代替 min-width -->
+        <el-table-column label="操作" width="280">
+          <template #default="scope">
+            <div class="op-buttons">
+              <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
+              <el-button size="small" @click="viewLog(scope.row)">日志</el-button>
+              <el-button
+                size="small"
+                type="warning"
+                @click="rerunTask(scope.row)"
+                :disabled="!scope.row.template_id"
+                :title="!scope.row.template_id ? '缺少关联模板，无法重新执行' : ''"
+              >
+                🔄 重新执行
               </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="json">📊 JSON</el-dropdown-item>
-                  <el-dropdown-item command="csv">📊 CSV</el-dropdown-item>
-                  <el-dropdown-item command="xlsx">📊 Excel</el-dropdown-item>
-                  <el-dropdown-item divided command="html">📄 HTML</el-dropdown-item>
-                  <el-dropdown-item command="markdown">📄 Markdown</el-dropdown-item>
-                  <el-dropdown-item command="txt">📄 TXT</el-dropdown-item>
-                  <el-dropdown-item divided command="xml">📦 XML</el-dropdown-item>
-                  <el-dropdown-item command="sql">📦 SQL</el-dropdown-item>
-                  <el-dropdown-item command="rss">📡 RSS</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-        </template>
-      </el-table-column>
-    </el-table>
+              <el-button
+                v-if="scope.row.status === 'running' || scope.row.status === 'pending'"
+                size="small"
+                type="danger"
+                @click="stopRunningTask(scope.row)"
+                :loading="stoppingIds.includes(scope.row.task_id)"
+              >
+                停止
+              </el-button>
+              <el-dropdown @command="(format) => exportTask(scope.row, format)">
+                <el-button size="small" type="primary">
+                  导出 <el-icon><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="json">📊 JSON</el-dropdown-item>
+                    <el-dropdown-item command="csv">📊 CSV</el-dropdown-item>
+                    <el-dropdown-item command="xlsx">📊 Excel</el-dropdown-item>
+                    <el-dropdown-item divided command="html">📄 HTML</el-dropdown-item>
+                    <el-dropdown-item command="markdown">📄 Markdown</el-dropdown-item>
+                    <el-dropdown-item command="txt">📄 TXT</el-dropdown-item>
+                    <el-dropdown-item divided command="xml">📦 XML</el-dropdown-item>
+                    <el-dropdown-item command="sql">📦 SQL</el-dropdown-item>
+                    <el-dropdown-item command="rss">📡 RSS</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
-    <!-- 预览结果弹窗 -->
+    <!-- 预览结果弹窗（不变） -->
     <el-dialog
       v-model="detailDialogVisible"
       title="任务详情"
@@ -635,9 +633,8 @@ async rerunTask(task) {
 .task-list-page {
   padding: 20px;
   width: 100%;
-  max-width: 100%;
   box-sizing: border-box;
-  overflow-x: hidden;
+  overflow-x: hidden;   /* 关键：阻止页面级横向溢出 */
 }
 .search-card {
   border-radius: 14px;
@@ -657,31 +654,47 @@ async rerunTask(task) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
+
+/* 表格滚动容器 */
+.table-scroll-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 14px;
+}
+
+/* 表格宽度策略 */
 .task-table {
   border: 1px solid #eee;
-  border-radius: 14px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   background-color: #fff;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
   box-sizing: border-box;
+  border-radius: 14px;
 }
 .task-table th {
   background-color: #fafafa;
   font-weight: 600;
   color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-table td {
   background-color: #fff;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-table .el-table__row:hover {
   background-color: #f5f7fa;
 }
 .op-buttons {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -689,8 +702,7 @@ async rerunTask(task) {
   margin: 0;
 }
 .short-date-picker {
-  width: 120px !important;
-  margin-right: 10px;
+  width: 110px !important;
 }
 .markdown-body {
   padding: 10px;

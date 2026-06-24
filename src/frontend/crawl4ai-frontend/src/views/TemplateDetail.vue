@@ -392,6 +392,8 @@ xpathToCss(xpath) {
   margin-left: auto;
   margin-right: auto;
   width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .content-area {
@@ -407,6 +409,8 @@ xpathToCss(xpath) {
   justify-content: center;
   transition: flex 0.3s ease;
   border-radius: 20px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .main-card.shrink {
@@ -414,10 +418,11 @@ xpathToCss(xpath) {
 }
 
 .main-card > .el-card {
-  max-width: 1200px;
   width: 100%;
   margin: 0 auto;
   border-radius: 20px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 ::v-deep(.el-tabs__item.is-active) {
