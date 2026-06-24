@@ -93,14 +93,14 @@ class PageSnapshotViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 预览任务限制检查
-        if task_type == 'preview':
-            preview_count = PageSnapshot.objects.filter(task_type='preview').count()
-            if preview_count >= 10:
-                return Response(
-                    {'code': 400, 'msg': '预览任务最多支持10条数据', 'data': None},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # ✅ 去掉预览任务限制
+        # if task_type == 'preview':
+        #     preview_count = PageSnapshot.objects.filter(task_type='preview').count()
+        #     if preview_count >= 10:
+        #         return Response(
+        #             {'code': 400, 'msg': '预览任务最多支持10条数据', 'data': None},
+        #             status=status.HTTP_400_BAD_REQUEST
+        #         )
         
         category = request.data.get('category')
         if not category:
@@ -825,6 +825,8 @@ def save_page_snapshot(request):
     task_type = request.data.get('task_type', 'formal')
     user_prompt = request.data.get('user_prompt', '')
     task_id = request.data.get('task_id')
+    raw_html = request.data.get('raw_html')
+    images = request.data.get('images', [])  # ✅ 获取 images
     
     if not url or not markdown:
         return Response({
@@ -848,7 +850,9 @@ def save_page_snapshot(request):
         category=category,
         task=task,
         task_type=task_type,
-        user_prompt=user_prompt
+        user_prompt=user_prompt,
+        raw_html=raw_html,
+        images=images,  
     )
     
     return Response({
@@ -1239,9 +1243,10 @@ def start_task(request):
     print("=" * 60)
     print("📥 收到 start_task 请求")
     print(f"📥 request.data: {request.data}")
-    print(f"📥 template_id: {request.data.get('template_id')}")
     print("=" * 60)
+    
     template_id = request.data.get('template_id')
+    original_task_id = request.data.get('original_task_id')  # ✅ 新增：原任务ID
     task_type = request.data.get('task_type', 'formal')
     user_prompt = request.data.get('user_prompt', '')
     ai_model = request.data.get('ai_model', 'qwen2:7b')
@@ -1249,15 +1254,38 @@ def start_task(request):
     ai_api_key = request.data.get('ai_api_key', '')
     generated_rule = request.data.get('generated_rule', '')
     
-    # 预览任务限制最多10条
-    if task_type == 'preview':
-        existing_count = PageSnapshot.objects.filter(task_type='preview').count()
-        if existing_count >= 10:
+    # ✅ 如果传入了 original_task_id，从原任务获取模板和配置
+    if original_task_id and not template_id:
+        try:
+            original_task = CrawlTask.objects.get(task_id=original_task_id)
+            if original_task.template:
+                template_id = original_task.template.id
+                print(f"✅ 从原任务获取模板ID: {template_id}")
+                # 继承原任务的其他配置
+                if not user_prompt and original_task.template.user_prompt:
+                    user_prompt = original_task.template.user_prompt
+                if not generated_rule and original_task.template.crawler_rule:
+                    generated_rule = original_task.template.crawler_rule
+            else:
+                return Response({
+                    'code': 400,
+                    'msg': '原任务没有关联模板，无法重新执行',
+                    'data': None
+                }, status=400)
+        except CrawlTask.DoesNotExist:
             return Response({
-                'code': 400, 
-                'msg': '预览任务最多支持10条数据，请删除旧预览任务后重试', 
+                'code': 404,
+                'msg': '原任务不存在',
                 'data': None
-            }, status=400)
+            }, status=404)
+    
+    # views.py - start_task
+
+    if task_type == 'preview':
+        # ✅ 预览模式限制最多 5 条
+        config = request.data.get('config', {})
+        config['max_pages'] = 5  # 只采集5条
+        config['max_depth'] = 1  # 只爬一层
     
     seed_url = None
     template_name = None
@@ -1352,31 +1380,74 @@ def pause_task(request, task_id):
         return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
 
 
+# views.py - 修改 stop_task
+
 @api_view(['POST'])
 def stop_task(request, task_id):
-    """停止任务"""
+    """停止任务 - 增强版"""
     try:
         task = CrawlTask.objects.get(task_id=task_id)
         
-        if task.status not in ['running', 'paused']:
-            return Response({'code': 400, 'msg': '只有运行中或暂停的任务可以停止', 'data': None}, status=400)
+        # ✅ 允许停止任何状态的任务（包括 preview）
+        if task.status not in ['running', 'pending']:
+            # 如果已经完成或停止，直接返回成功
+            if task.status in ['stopped', 'completed', 'failed']:
+                return Response({
+                    'code': 200,
+                    'msg': f'任务已处于 {task.status} 状态',
+                    'data': {'task_id': task_id, 'status': task.status}
+                })
+            return Response({
+                'code': 400, 
+                'msg': f'当前状态 {task.status} 无法停止', 
+                'data': None
+            }, status=400)
         
+        # ✅ 1. 设置停止信号（如果存在）
         with TASK_CONTROL_LOCK:
             if task_id in TASK_CONTROL_SIGNALS:
                 TASK_CONTROL_SIGNALS[task_id]['stop_event'] = True
                 TASK_CONTROL_SIGNALS[task_id]['is_stop'] = True
+                print(f"✅ 停止信号已发送: {task_id}")
+            else:
+                print(f"⚠️ 任务 {task_id} 不在控制信号中")
         
+        # ✅ 2. 强制更新数据库状态
         task.status = 'stopped'
         task.save()
+        print(f"✅ 任务状态已更新为 stopped: {task_id}")
+        
+        # ✅ 3. 如果是预览任务，清理预览数据限制
+        if task.task_type == 'preview':
+            from .models import PageSnapshot
+            # 标记预览任务的所有快照为已停止
+            PageSnapshot.objects.filter(task=task).update(
+                process_status='stopped',
+                error_info='用户停止预览'
+            )
+            print(f"📌 预览任务 {task_id} 的快照已标记为停止")
         
         return Response({
             'code': 200,
-            'msg': 'success',
-            'data': {'task_id': task_id, 'status': 'stopped'}
+            'msg': '任务已停止',
+            'data': {
+                'task_id': task_id, 
+                'status': 'stopped',
+                'task_type': task.task_type
+            }
         })
+        
     except CrawlTask.DoesNotExist:
         return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
-
+    except Exception as e:
+        print(f"❌ 停止任务异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response({
+            'code': 500,
+            'msg': f'停止失败: {str(e)}',
+            'data': None
+        }, status=500)
 
 @api_view(['DELETE'])
 def delete_task(request, task_id):
@@ -1515,71 +1586,65 @@ def task_progress_api(request, task_id):
 
 @api_view(['GET'])
 def task_preview_api(request, task_id):
-    """采集数据预览（优先返回结构化清洗数据）"""
     limit = int(request.query_params.get('limit', 10))
     
     try:
-        # 尝试将 task_id 转换为 UUID
-        import uuid
-        try:
-            task_uuid = uuid.UUID(task_id)
-        except ValueError:
-            # 如果 task_id 不是 UUID 格式，尝试用字符串查询
-            task_uuid = task_id
+        task = CrawlTask.objects.get(task_id=task_id)
+    except CrawlTask.DoesNotExist:
+        return Response({'code': 404, 'msg': f'任务不存在: {task_id}'}, status=404)
+    
+    # ✅ 先查当前任务的快照
+    pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
+    
+    # ✅ 如果当前任务没有快照，用种子URL去库里找已有的
+    if not pages.exists() and task.seed_url:
+        pages = PageSnapshot.objects.filter(url=task.seed_url).order_by('-created_at')[:limit]
+    
+    # 如果还是没有，尝试模糊匹配（去掉末尾斜杠等差异）
+    if not pages.exists() and task.seed_url:
+        base_url = task.seed_url.rstrip('/')
+        pages = PageSnapshot.objects.filter(url__startswith=base_url).order_by('-created_at')[:limit]
+    
+    # 构建返回数据
+    preview = []
+    raw_html = None
+    markdown_content = None
+    
+    for page in pages:
+        if not raw_html and page.raw_html:
+            raw_html = page.raw_html
+        if not markdown_content and page.markdown:
+            markdown_content = page.markdown
         
-        # 查询任务
-        try:
-            if isinstance(task_uuid, uuid.UUID):
-                task = CrawlTask.objects.get(task_id=task_uuid)
-            else:
-                task = CrawlTask.objects.get(task_id=task_id)
-        except CrawlTask.DoesNotExist:
-            return Response({
-                'code': 404,
-                'msg': f'任务不存在: {task_id}',
-                'data': None
-            }, status=404)
-        
-        # 查询关联的页面快照
-        pages = PageSnapshot.objects.filter(task=task).order_by('-created_at')[:limit]
-        
-        preview = []
-        for page in pages:
-            if page.extracted_data:
-                # 如果有提取的数据，直接返回
-                preview.append(page.extracted_data)
-            else:
-                # 否则返回基本信息
-                preview.append({
-                    'url': page.url,
-                    'category': page.category,
-                    'markdown_preview': page.markdown[:500] if page.markdown else '',
-                    'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
-                })
-        
-        total = PageSnapshot.objects.filter(task=task).count()
-        
-        return Response({
-            'code': 200,
-            'msg': 'success',
-            'data': {
-                'total': total,
-                'preview': preview
-            }
-        })
-        
-    except Exception as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"❌ task_preview_api 错误: {error_detail}")
-        return Response({
-            'code': 500,
-            'msg': f'获取预览数据失败: {str(e)}',
-            'data': {
-                'total': 0,
-                'preview': []
-            }
-        }, status=500)
+        if page.extracted_data:
+            preview.append({
+                'url': page.url,
+                'category': page.category,
+                'extracted_data': page.extracted_data,
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+        else:
+            preview.append({
+                'url': page.url,
+                'category': page.category,
+                'markdown_preview': page.markdown[:500] if page.markdown else '',
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+    
+    total = pages.count()
+    
+    return Response({
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'total': total,
+            'preview': preview,
+            'raw_html': raw_html,
+            'markdown': markdown_content,
+            'has_raw': bool(raw_html),
+            'has_markdown': bool(markdown_content)
+        }
+    })
 
 @api_view(['GET'])
 def task_download_api(request, task_id):
@@ -1643,60 +1708,11 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     from pathlib import Path
     
     # ============================================================
-    # ✅ 关键修复：确保 sandbox 路径在 sys.path 中
-    # ============================================================
-    current_file = Path(__file__).resolve()
-    BACKEND_ROOT = current_file.parent.parent.parent
-    PROJECT_ROOT = BACKEND_ROOT.parent.parent
-    sandbox_path = PROJECT_ROOT / "sandbox"
-    sandbox_str = str(sandbox_path)
-    
-    # 确保 sandbox 在 sys.path 最前面
-    if sandbox_str in sys.path:
-        sys.path.remove(sandbox_str)
-    sys.path.insert(0, sandbox_str)
-    
-    print(f"🔍 sandbox路径: {sandbox_str}")
-    print(f"🔍 sys.path前3项: {sys.path[:3]}")
-    
-    # 验证导入
-    try:
-        import standalone_crawler
-        print("✅ standalone_crawler 导入成功")
-    except ImportError as e:
-        print(f"❌ standalone_crawler 导入失败: {e}")
-    
-    # ============================================================
-    # 设置Django环境
-    # ============================================================
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
-    
-    import django
-    django.setup()
-    
-    from django.utils import timezone
-    from apps.api.models import CrawlTask, SeedURL
-    
-    # 在爬虫启动前自动创建种子
-    seed, created = SeedURL.objects.get_or_create(
-        url=seed_url,
-        defaults={
-            'status': 'pending',
-            'need_render': True,
-            'school': 'default',  # ✅ 添加 school 字段
-            'category': 'other'   # ✅ 添加 category 字段
-        }
-    )
-    if created:
-        print(f"✅ 已自动创建种子: {seed_url}")
-    
-    # ============================================================
-    # 创建任务专属日志
+    # ✅ 第1步：先创建日志（必须最早）
     # ============================================================
     import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"🚀 爬虫线程启动: task_id={task_id}")
     
+    # 创建任务专属日志
     task_logger = logging.getLogger(f'crawl_task_{task_id}')
     task_logger.setLevel(logging.DEBUG)
     task_logger.handlers.clear()
@@ -1723,9 +1739,68 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
     task_logger.info(f"⚙️ 配置: {config}")
     
     # ============================================================
+    # ✅ 第2步：路径设置
+    # ============================================================
+    current_file = Path(__file__).resolve()
+    BACKEND_ROOT = current_file.parent.parent.parent
+    PROJECT_ROOT = BACKEND_ROOT.parent.parent
+    sandbox_path = PROJECT_ROOT / "sandbox"
+    sandbox_str = str(sandbox_path)
+    
+    if sandbox_str in sys.path:
+        sys.path.remove(sandbox_str)
+    sys.path.insert(0, sandbox_str)
+    
+    task_logger.info(f"🔍 sandbox路径: {sandbox_str}")
+    
+    try:
+        import standalone_crawler
+        task_logger.info("✅ standalone_crawler 导入成功")
+    except ImportError as e:
+        task_logger.error(f"❌ standalone_crawler 导入失败: {e}")
+    
+    # ============================================================
+    # 设置Django环境
+    # ============================================================
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edu_backend.settings')
+    
+    import django
+    django.setup()
+    
+    from django.utils import timezone
+    from apps.api.models import CrawlTask, SeedURL
+    
+    # ============================================================
+    # ✅ 第3步：获取任务信息
+    # ============================================================
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+        is_preview = (task.task_type == 'preview')
+    except:
+        is_preview = False
+    
+    max_pages = 5 if is_preview else None  # ✅ 改成 None，不是 config.get()
+    actual_depth = 1 if is_preview else max_depth
+    
+    task_logger.info(f"📊 任务类型: {'预览(最多%d页)' % max_pages if is_preview else '正式'}")
+    task_logger.info(f"📏 爬取深度: {actual_depth}")
+    
+    # 自动创建种子
+    seed, created = SeedURL.objects.get_or_create(
+        url=seed_url,
+        defaults={
+            'status': 'pending',
+            'need_render': True,
+            'school': 'default',
+            'category': 'other'
+        }
+    )
+    if created:
+        task_logger.info(f"✅ 已自动创建种子: {seed_url}")
+    
+    # ============================================================
     # 注册控制信号
     # ============================================================
-    
     with TASK_CONTROL_LOCK:
         TASK_CONTROL_SIGNALS[task_id] = {
             'stop_event': False,
@@ -1746,7 +1821,6 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         )
         task_logger.info(f"✅ 任务状态已更新为 running")
         
-        # ✅ 导入爬虫模块（路径已修复）
         try:
             from standalone_crawler.crawler import crawl as run_crawl
             task_logger.info("✅ 爬虫模块导入成功")
@@ -1754,11 +1828,9 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
             task_logger.error(f"❌ 导入爬虫模块失败: {str(e)}")
             raise Exception(f"导入爬虫模块失败: {str(e)}")
         
-        # 创建 API 客户端
         from standalone_crawler.api_client import APIClient
         api_client = APIClient(base_url='http://127.0.0.1:8000')
         
-        # 创建事件循环并运行爬虫
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -1766,14 +1838,17 @@ def _run_async_crawl(task_id, seed_url, max_depth, config):
         
         crawl_task = loop.create_task(run_crawl(
             seed_url=seed_url,
-            max_depth=max_depth,
+            max_depth=actual_depth,
+            max_pages=max_pages,
             max_concurrent=config.get('max_concurrent', 5),
             request_delay=config.get('request_delay', 1.0),
-            allowed_domains=config.get('allowed_domains', []),
+            allowed_domains=config.get('default_allowed_domains', 
+                                     config.get('allowed_domains', [])),
             white_list_patterns=config.get('white_list_patterns', []),
-            enable_dead_check=config.get('enable_dead_check', False),
+            enable_dead_check=False,
             api_client=api_client,
             task_id=task_id,
+            task_type='preview' if is_preview else 'formal',
         ))
         
         # 定期检查停止信号
@@ -1954,3 +2029,326 @@ def review_template(request, pk):
     
     else:
         return Response({'code': 400, 'msg': 'action 必须是 approve 或 reject'}, status=400)
+    
+    
+# ==================== 导出接口 ====================
+
+@api_view(['GET'])
+def task_export_api(request, task_id):
+    """
+    导出任务结果（支持多种格式）
+    GET /api/tasks/<task_id>/export/?format=json|csv|md|txt|html|xml|sql|rss
+    """
+    import csv
+    import json
+    from django.http import HttpResponse
+    from io import StringIO
+    from datetime import datetime
+    
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+    except CrawlTask.DoesNotExist:
+        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
+    
+    format_type = request.query_params.get('format', 'json')
+    
+    # 获取数据
+    pages = PageSnapshot.objects.filter(task=task)
+    raw_html = pages.first().raw_html if pages.first() else None
+    
+    # 构建结构化数据
+    structured_data = []
+    for page in pages:
+        if page.extracted_data:
+            structured_data.append(page.extracted_data)
+        else:
+            structured_data.append({
+                'url': page.url,
+                'category': page.category,
+                'content': page.markdown[:500] if page.markdown else '',
+                'created_at': page.created_at.strftime('%Y-%m-%d %H:%M:%S') if page.created_at else None
+            })
+    
+    # ===== JSON =====
+    if format_type == 'json':
+        response_data = {
+            'task_id': str(task.task_id),
+            'task_name': task.task_name,
+            'created_at': task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'total': len(structured_data),
+            'data': structured_data
+        }
+        if raw_html:
+            response_data['raw_html'] = raw_html[:10000]
+        
+        response = HttpResponse(
+            json.dumps(response_data, ensure_ascii=False, indent=2),
+            content_type='application/json'
+        )
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.json"'
+        return response
+    
+    # ===== CSV =====
+    elif format_type == 'csv':
+        output = StringIO()
+        if structured_data:
+            fieldnames = list(structured_data[0].keys())
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(structured_data)
+        
+        response = HttpResponse(output.getvalue(), content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.csv"'
+        return response
+    
+    # ===== TXT =====
+    elif format_type == 'txt':
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"采集结果 - {task.task_name or task.task_id}")
+        lines.append("=" * 60)
+        lines.append(f"任务ID: {task.task_id}")
+        lines.append(f"创建时间: {task.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"数据量: {len(structured_data)} 条")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        for i, item in enumerate(structured_data, 1):
+            lines.append(f"[记录 {i}]")
+            for key, value in item.items():
+                lines.append(f"  {key}: {value}")
+            lines.append("")
+            lines.append("-" * 30)
+        
+        response = HttpResponse("\n".join(lines), content_type='text/plain')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.txt"'
+        return response
+    
+    # ===== Markdown =====
+    elif format_type == 'md':
+        lines = []
+        lines.append(f"# 采集结果 - {task.task_name or task.task_id}")
+        lines.append("")
+        lines.append(f"- **任务ID**: {task.task_id}")
+        lines.append(f"- **创建时间**: {task.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"- **数据量**: {len(structured_data)} 条")
+        lines.append("")
+        
+        for i, item in enumerate(structured_data, 1):
+            lines.append(f"## 记录 {i}")
+            lines.append("")
+            for key, value in item.items():
+                lines.append(f"- **{key}**: {value}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        
+        response = HttpResponse("\n".join(lines), content_type='text/markdown')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.md"'
+        return response
+    
+    # ===== HTML =====
+    elif format_type == 'html':
+        template = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>采集结果 - {task_name}</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: #409EFF; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f2f2f2; }
+        .raw-data { background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px; }
+        .footer { margin-top: 40px; text-align: center; color: #999; font-size: 12px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 采集结果</h1>
+        <p><strong>任务:</strong> {task_name}</p>
+        <p><strong>任务ID:</strong> {task_id}</p>
+        <p><strong>创建时间:</strong> {created_at}</p>
+        <p><strong>数据量:</strong> {total} 条</p>
+    </div>
+    
+    <h2>📋 结构化数据</h2>
+    <table>
+        <tr>{headers}</tr>
+        {rows}
+    </table>
+    
+    <h2>📄 原始HTML</h2>
+    <div class="raw-data">
+        <pre>{raw_html}</pre>
+    </div>
+    
+    <div class="footer">
+        <p>生成时间: {export_time} | Crawl4AI 采集系统</p>
+    </div>
+</body>
+</html>"""
+        
+        headers = ""
+        rows = ""
+        if structured_data:
+            keys = list(structured_data[0].keys())
+            headers = "".join([f"<th>{k}</th>" for k in keys])
+            for item in structured_data[:50]:
+                row = "".join([f"<td>{str(item.get(k, ''))}</td>" for k in keys])
+                rows += f"<tr>{row}</tr>"
+        
+        raw_html_escaped = (raw_html or '暂无原始数据').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')[:20000]
+        
+        content = template.format(
+            task_name=task.task_name or f"任务_{str(task.task_id)[:8]}",
+            task_id=task.task_id,
+            created_at=task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            total=len(structured_data),
+            headers=headers,
+            rows=rows,
+            raw_html=raw_html_escaped,
+            export_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        )
+        
+        response = HttpResponse(content, content_type='text/html')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.html"'
+        return response
+    
+    # ===== XML =====
+    elif format_type == 'xml':
+        import xml.dom.minidom as minidom
+        from xml.etree import ElementTree as ET
+        
+        root = ET.Element("results")
+        root.set("task_id", str(task.task_id))
+        root.set("total", str(len(structured_data)))
+        
+        for item in structured_data:
+            record = ET.SubElement(root, "record")
+            for key, value in item.items():
+                field = ET.SubElement(record, key)
+                field.text = str(value)
+        
+        xml_str = ET.tostring(root, encoding='unicode')
+        dom = minidom.parseString(xml_str)
+        pretty_xml = dom.toprettyxml(indent="  ")
+        
+        response = HttpResponse(pretty_xml, content_type='application/xml')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xml"'
+        return response
+    
+    # ===== SQL =====
+    elif format_type == 'sql':
+        lines = []
+        lines.append("-- 采集数据导入")
+        lines.append(f"-- 任务ID: {task.task_id}")
+        lines.append(f"-- 数据量: {len(structured_data)} 条")
+        lines.append("")
+        
+        if structured_data:
+            table_name = f"crawl_data_{str(task.task_id)[:8]}"
+            fields = list(structured_data[0].keys())
+            lines.append(f"CREATE TABLE IF NOT EXISTS {table_name} (")
+            lines.append("    id INTEGER PRIMARY KEY AUTOINCREMENT,")
+            for field in fields:
+                lines.append(f"    {field} TEXT,")
+            lines.append("    created_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+            lines.append(");")
+            lines.append("")
+            
+            for item in structured_data:
+                values = []
+                for field in fields:
+                    val = str(item.get(field, '')).replace("'", "''")
+                    values.append(f"'{val}'")
+                lines.append(f"INSERT INTO {table_name} ({', '.join(fields)}) VALUES ({', '.join(values)});")
+        
+        response = HttpResponse("\n".join(lines), content_type='text/plain')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.sql"'
+        return response
+    
+    # ===== RSS =====
+    elif format_type == 'rss':
+        rss_template = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+    <channel>
+        <title>采集结果 - {task_name}</title>
+        <link>http://localhost</link>
+        <description>采集数据订阅</description>
+        <pubDate>{pub_date}</pubDate>
+        {items}
+    </channel>
+</rss>"""
+        
+        items = []
+        for item in structured_data[:20]:
+            title = item.get('title', '未命名') or item.get('name', '未命名')
+            desc = str(item.get('content', '') or item.get('description', ''))[:200]
+            items.append(f"""
+        <item>
+            <title>{title}</title>
+            <link>{item.get('url', '')}</link>
+            <description>{desc}</description>
+            <pubDate>{datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>
+        </item>
+            """)
+        
+        content = rss_template.format(
+            task_name=task.task_name or f"任务_{str(task.task_id)[:8]}",
+            pub_date=datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+            items="".join(items)
+        )
+        
+        response = HttpResponse(content, content_type='application/rss+xml')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xml"'
+        return response
+    
+    # ===== Excel (XLSX) =====
+    elif format_type == 'xlsx':
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+        except ImportError:
+            return Response({
+                'code': 400,
+                'msg': 'Excel导出需要安装 openpyxl: pip install openpyxl',
+                'data': None
+            }, status=400)
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "采集数据"
+        
+        if structured_data:
+            headers = list(structured_data[0].keys())
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+            
+            for row, item in enumerate(structured_data, 2):
+                for col, key in enumerate(headers, 1):
+                    ws.cell(row=row, column=col, value=str(item.get(key, '')))
+        
+        # 自动调整列宽
+        for col in ws.columns:
+            max_length = max(len(str(cell.value or '')) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="task_{task_id}.xlsx"'
+        return response
+    
+    else:
+        return Response({
+            'code': 400,
+            'msg': f'不支持的格式: {format_type}。支持: json, csv, xlsx, md, txt, html, xml, sql, rss',
+            'data': None
+        }, status=400)

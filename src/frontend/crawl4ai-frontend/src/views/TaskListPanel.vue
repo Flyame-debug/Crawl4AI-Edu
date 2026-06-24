@@ -53,9 +53,45 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="200">
+        <el-table-column label="操作" width="320">
           <template #default="scope">
+            <!-- ✅ 停止按钮（只在运行中或暂停时显示） -->
+            <el-button 
+              v-if="canStop(scope.row.status)" 
+              size="small" 
+              type="danger" 
+              @click="handleStop(scope.row)"
+              :loading="stoppingIds.includes(scope.row.task_id)"
+            >
+              ⏹️ 停止
+            </el-button>
+            
             <el-button size="small" type="primary" @click="viewTask(scope.row)">查看</el-button>
+            
+            <!-- ✅ 导出下拉菜单（只对已完成的任务显示） -->
+            <el-dropdown 
+              v-if="scope.row.status === 'completed' || scope.row.status === 'success'"
+              @command="(format) => handleExport(scope.row, format)"
+              style="margin-left: 4px;"
+            >
+              <el-button size="small" type="success">
+                导出 <el-icon><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="json">📊 JSON</el-dropdown-item>
+                  <el-dropdown-item command="csv">📊 CSV</el-dropdown-item>
+                  <el-dropdown-item command="xlsx">📊 Excel</el-dropdown-item>
+                  <el-dropdown-item divided command="md">📄 Markdown</el-dropdown-item>
+                  <el-dropdown-item command="txt">📄 TXT</el-dropdown-item>
+                  <el-dropdown-item command="html">📄 HTML</el-dropdown-item>
+                  <el-dropdown-item divided command="xml">📦 XML</el-dropdown-item>
+                  <el-dropdown-item command="sql">📦 SQL</el-dropdown-item>
+                  <el-dropdown-item command="rss">📡 RSS订阅</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            
             <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
           </template>
         </el-table-column>
@@ -65,10 +101,12 @@
 </template>
 
 <script>
-import { getTasks, deleteTask } from '@/api/tasks'
+import { getTasks, deleteTask, stopTask } from '@/api/tasks'
+import { ArrowDown } from '@element-plus/icons-vue'
 
 export default {
   name: 'TaskListPanel',
+  components: { ArrowDown },
   props: {
     template: {
       type: Object,
@@ -79,7 +117,8 @@ export default {
     return {
       searchKeyword: '',
       tasks: [],
-      loading: false
+      loading: false,
+      stoppingIds: []  // ✅ 正在停止的任务ID列表（用于加载状态）
     }
   },
   computed: {
@@ -104,7 +143,91 @@ export default {
     this.fetchTasks()
   },
   methods: {
-    // ✅ 获取该模板下的所有任务
+    // ✅ 判断是否可以停止
+    canStop(status) {
+      return ['pending', 'running', 'paused'].includes(status)
+    },
+    
+    // ✅ 停止任务
+    async handleStop(row) {
+      try {
+        await this.$confirm(
+          `确认停止任务【${row.task_name || row.task_id}】？\n已采集的数据会保留。`,
+          '停止确认',
+          { type: 'warning' }
+        )
+        
+        this.stoppingIds.push(row.task_id)
+        const res = await stopTask(row.task_id)
+        
+        if (res.data.code === 200) {
+          this.$message.success('任务已停止')
+          // 刷新列表
+          await this.fetchTasks()
+        } else {
+          this.$message.error(res.data.msg || '停止失败')
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('停止任务失败：', error)
+          this.$message.error('停止失败：' + (error.message || '未知错误'))
+        }
+      } finally {
+        this.stoppingIds = this.stoppingIds.filter(id => id !== row.task_id)
+      }
+    },
+    
+    // ✅ 导出任务结果
+    async handleExport(row, format) {
+      try {
+        const loading = this.$loading({
+          text: `正在导出 ${format.toUpperCase()} 格式...`,
+          spinner: 'el-icon-loading'
+        })
+        
+        // 调用导出API
+        const response = await fetch(
+          `/api/tasks/${row.task_id}/export/?format=${format}`,
+          {
+            headers: {
+              'Authorization': 'Bearer ' + (localStorage.getItem('token') || '')
+            }
+          }
+        )
+        
+        loading.close()
+        
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.detail || errorData.msg || '导出失败')
+        }
+        
+        // 获取文件名
+        const contentDisposition = response.headers.get('Content-Disposition')
+        let filename = `task_${row.task_id}.${format}`
+        if (contentDisposition) {
+          const match = contentDisposition.match(/filename="?([^"]+)"?/)
+          if (match) filename = match[1]
+        }
+        
+        // 下载文件
+        const blob = await response.blob()
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(link.href)
+        
+        this.$message.success(`导出成功：${filename}`)
+      } catch (error) {
+        console.error('导出失败：', error)
+        this.$message.error('导出失败：' + error.message)
+      }
+    },
+    
+    // ✅ 获取任务列表
     async fetchTasks() {
       if (!this.template || !this.template.id) {
         console.warn('⚠️ 没有模板ID，无法获取任务列表')
@@ -115,8 +238,8 @@ export default {
       this.loading = true
       try {
         const params = {
-          template_id: this.template.id,  // ✅ 按模板ID筛选
-          include_preview: 'true',         // ✅ 包含预览任务
+          template_id: this.template.id,
+          include_preview: 'true',
           page: 1,
           page_size: 50
         }
@@ -141,19 +264,24 @@ export default {
     
     resetSearch() {
       this.searchKeyword = ''
-      // 不需要重新请求，因为 computed 会自动过滤
     },
     
     viewTask(row) {
-      this.$router.push(`/task/${row.task_id}`)
-    },
+  // 使用 task_id 跳转
+  const taskId = row.task_id || row.id
+  if (taskId) {
+    this.$router.push(`/task/${taskId}`)
+  } else {
+    this.$message.error('任务ID不存在')
+  }
+},
     
     async handleDelete(row) {
       try {
         await this.$confirm(`确认删除任务【${row.task_name || row.task_id}】？`, '删除确认', { type: 'warning' })
         await deleteTask(row.task_id)
         this.$message.success('删除成功')
-        this.fetchTasks()  // 刷新列表
+        this.fetchTasks()
       } catch (error) {
         if (error !== 'cancel') {
           console.error('删除任务失败：', error)

@@ -112,6 +112,7 @@ async def crawl(
     seed_url: str | None = None,
     max_depth: int | None = None,
     max_concurrent: int | None = None,
+    max_pages=None,      
     enable_dead_check: bool = False,
     allowed_domains: list[str] | None = None,
     white_list_patterns: list[str] | None = None,
@@ -393,6 +394,7 @@ async def _run_bfs_crawl(
     seed_url: str,
     max_depth: int | None = None,
     max_concurrent: int | None = None,
+    max_pages: int | None = None,
     enable_dead_check: bool = False,
     allowed_domains: list[str] | None = None,
     white_list_patterns: list[str] | None = None,
@@ -418,6 +420,25 @@ async def _run_bfs_crawl(
     # Map legacy "full" → V2 "formal" for API calls.
     _api_task_type: str = "formal" if task_type == "full" else task_type
 
+    # ============================================================
+    # ✅ 新增：停止信号检查函数
+    # ============================================================
+    def _should_stop() -> bool:
+        """检查任务是否应该停止"""
+        if task_id is None:
+            return False
+        try:
+            # 尝试从 views 导入信号
+            from apps.api.views import TASK_CONTROL_SIGNALS, TASK_CONTROL_LOCK
+            with TASK_CONTROL_LOCK:
+                signal = TASK_CONTROL_SIGNALS.get(task_id, {})
+                return signal.get('is_stop', False)
+        except ImportError:
+            # 如果在独立环境中运行，无法导入 Django 信号
+            return False
+        except Exception:
+            return False
+
     # --- Resolve config -------------------------------------------------------
     cfg: dict[str, Any] = {}
     if config_path is not None:
@@ -429,9 +450,12 @@ async def _run_bfs_crawl(
     _allowed_domains = allowed_domains if allowed_domains is not None else cfg.get("default_allowed_domains", [])
     _white_patterns = white_list_patterns if white_list_patterns is not None else cfg.get("white_list_patterns", [])
 
-    if _is_preview:
-        logger.info("预览模式 (Preview Mode): 最多抓取 %d 个页面", preview_limit)
-
+    # ✅ 改为：统一使用 max_pages 控制
+    _effective_max_pages = max_pages or (preview_limit if _is_preview else None)
+    
+    if _effective_max_pages is not None:
+        logger.info("页面限制模式: 最多抓取 %d 个页面", _effective_max_pages)
+        
     dead_checker = _check_dead_links
     if enable_dead_check and dead_checker is None:
         logger.warning("enable_dead_check=True but dead_link_checker is not available; skipped.")
@@ -508,26 +532,35 @@ async def _run_bfs_crawl(
 
     semaphore = asyncio.Semaphore(_max_concurrent)
     current_level: list[str] = initial_urls
-    _preview_pages_done: int = 0  # Counter for preview mode page limit.
+    _pages_done: int = 0  # 统一计数器，不区分预览/正式
     _all_page_results: list[dict[str, Any]] = []  # Accumulate for quality report.
 
     for depth in range(_max_depth + 1):
+        # ✅ 每次循环开始前检查停止信号
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，终止爬取 (depth={depth})")
+            break
+
         if not current_level:
             logger.info("No more URLs at depth %d — crawl finished.", depth)
             break
 
         # Preview mode: enforce page limit before processing this level.
-        if _is_preview and _preview_pages_done >= preview_limit:
-            logger.info(
-                "预览模式: 已达到上限 %d 页, 停止抓取 (depth=%d).",
-                preview_limit, depth,
-            )
+        if _effective_max_pages is not None and _pages_done >= _effective_max_pages:
+            logger.info("已达到页面上限 %d，停止抓取", _effective_max_pages)
             break
 
         logger.info("Depth %d: processing %d URL(s) (max_concurrent=%d)…",
                      depth, len(current_level), _max_concurrent)
 
         async def _worker(url: str) -> dict[str, Any]:
+            # ✅ 在 worker 中也检查停止信号
+            if _should_stop():
+                return {
+                    "success": False, "url": url, "depth": depth,
+                    "links": [], "images": [], "error": "Task stopped by user",
+                    "stopped": True,
+                }
             # Skip already-crawled URLs (resume mode).
             if url in _crawled_set:
                 return {
@@ -557,6 +590,11 @@ async def _run_bfs_crawl(
             *[_worker(u) for u in current_level], return_exceptions=True,
         )
 
+        # ✅ 收集完结果后再次检查停止信号
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，停止处理当前层级结果")
+            break
+
         next_level: list[str] = []
         for result in results:
             if isinstance(result, Exception):
@@ -572,6 +610,11 @@ async def _run_bfs_crawl(
                 })
                 continue
 
+            # ✅ 如果是停止信号导致的失败，不继续处理
+            if result.get("stopped", False):
+                logger.info("⏹️ 任务被停止，跳过后续结果")
+                break
+
             stats.add_result(result)
             _all_page_results.append(result)
 
@@ -579,14 +622,16 @@ async def _run_bfs_crawl(
                 continue
 
             # Preview mode: increment completed page counter.
-            if _is_preview:
-                _preview_pages_done += 1
-                if _preview_pages_done >= preview_limit:
-                    # Do not queue more links for the next level.
-                    logger.info(
-                        "预览模式: %d/%d 页面已完成, 不再收集新链接.",
-                        _preview_pages_done, preview_limit,
-                    )
+            if not result.get("success"):
+                continue
+
+# ✅ 预览模式：每成功一页就检查是否够了
+            if _effective_max_pages is not None:
+                _pages_done += 1
+                if _pages_done >= 2:  # ✅ 2条数据就够预览了
+                    logger.info("预览模式: 已获取 %d 条数据，停止继续爬取", _pages_done)
+                    break  # 跳出当前层级的 for 循环
+                
 
             new_links: list[str] = result.get("links", [])
 
@@ -604,17 +649,27 @@ async def _run_bfs_crawl(
                     logger.warning("Dead-link check raised an error: %s — continuing.", exc)
 
             # Preview mode: stop collecting links once limit is reached.
-            if _is_preview and _preview_pages_done >= preview_limit:
+            if _effective_max_pages is not None and _pages_done >= _effective_max_pages:
                 continue
+
+            # ✅ 收集链接前检查停止信号
+            if _should_stop():
+                logger.warning(f"⏹️ 任务 {task_id} 被用户停止，停止收集新链接")
+                break
 
             for link in new_links:
                 if not bloom.contains(link):
                     bloom.add(link)
                     next_level.append(link)
 
+        # ✅ 如果因停止信号跳出，不再继续下一层
+        if _should_stop():
+            logger.warning(f"⏹️ 任务 {task_id} 被用户停止，终止爬取")
+            break
+
         # Preview mode: stop descending if limit already reached.
-        if _is_preview and _preview_pages_done >= preview_limit:
-            logger.info("预览模式: 已收集 %d 页, 停止继续抓取.", _preview_pages_done)
+        if _effective_max_pages is not None and _pages_done >= _effective_max_pages:
+            logger.info("已达到页面上限 %d，停止继续抓取.", _pages_done)
             current_level = []
         else:
             current_level = next_level

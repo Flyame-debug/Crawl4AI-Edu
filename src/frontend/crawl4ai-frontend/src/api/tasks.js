@@ -1,71 +1,56 @@
 // src/api/tasks.js
-import api from '@/utils/api'
+import request from './request'
 
-// ----------------------
-// 任务控制接口
-// ----------------------
-
-// 启动采集任务
-export function startTask(data) {
-  return api.post('/api/tasks/start/', data)
-}
-
-// 暂停任务
-export function pauseTask(taskId) {
-  return api.post(`/api/tasks/${taskId}/pause/`)
-}
-
-// 停止/取消任务
+// ===== 停止任务 =====
 export function stopTask(taskId) {
-  return api.post(`/api/tasks/${taskId}/stop/`)
-}
-
-// 删除任务（修正：加上 /delete/ 后缀，与文档一致）
-export function deleteTask(taskId) {
-  return api.delete(`/api/tasks/${taskId}/delete/`)
-}
-
-// ----------------------
-// 任务查询接口
-// ----------------------
-
-// 获取任务列表
-export function getTasks(params) {
-  return api.get('/api/tasks/', { params })
-}
-
-// 获取任务详情
-export function getTaskDetail(taskId) {
-  return api.get(`/api/tasks/${taskId}/`)
-}
-
-// 获取任务进度
-export function getTaskProgress(taskId) {
-  return api.get(`/api/tasks/${taskId}/progress/`)
-}
-
-// 获取采集数据预览
-export function getTaskPreview(taskId, limit = 5) {
-  return api.get(`/api/tasks/${taskId}/preview/`, { params: { limit } })
-}
-
-// ----------------------
-// 数据导出接口
-// ----------------------
-
-// 下载任务结果（返回文件流）
-export function downloadTaskResult(taskId, format = 'json') {
-  return api.get(`/api/tasks/${taskId}/download/`, {
-    params: { format },
-    responseType: 'blob'
+  return request({
+    url: `/tasks/${taskId}/stop/`,  // ✅ 去掉 /api/
+    method: 'POST',
   })
 }
 
-// ----------------------
-// 页面快照接口
-// ----------------------
+// 其他函数如果有类似问题，也一起修复
+export function getTasks(params) {
+  return request({
+    url: '/tasks/',  // ✅ 去掉 /api/
+    method: 'GET',
+    params
+  })
+}
 
-// 获取页面列表
-export function getPageSnapshots(params) {
-  return api.get('/api/pagesnapshot/', { params })
+export function getTaskDetail(taskId) {
+  return request({
+    url: `/tasks/${taskId}/detail/`,  // ✅ 去掉 /api/
+    method: 'GET'
+  })
+}
+
+export function getTaskProgress(taskId) {
+  return request({
+    url: `/tasks/${taskId}/progress/`,  // ✅ 去掉 /api/
+    method: 'GET'
+  })
+}
+
+export function getTaskPreview(taskId, limit = 10) {
+  return request({
+    url: `/tasks/${taskId}/preview/`,  // ✅ 去掉 /api/
+    method: 'GET',
+    params: { limit }
+  })
+}
+
+export function startTask(data) {
+  return request({
+    url: '/tasks/start/',  // ✅ 去掉 /api/
+    method: 'POST',
+    data
+  })
+}
+
+export function deleteTask(taskId) {
+  return request({
+    url: `/tasks/${taskId}/delete/`,  // ✅ 去掉 /api/
+    method: 'DELETE'
+  })
 }
