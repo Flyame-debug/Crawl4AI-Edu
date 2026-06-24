@@ -54,3 +54,21 @@ export function deleteTask(taskId) {
     method: 'DELETE'
   })
 }
+
+// ✅ 关联任务到模板
+export const linkTaskTemplate = (taskId, templateId) => {
+  return request({
+    url: `/api/tasks/${taskId}/link-template/`,
+    method: 'POST',
+    data: { template_id: templateId }
+  })
+}
+
+// ✅ 获取模板列表（用于下拉选择）
+export const getTemplates = (params) => {
+  return request({
+    url: '/api/templates/',
+    method: 'GET',
+    params
+  })
+}

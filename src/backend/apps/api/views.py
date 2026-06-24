@@ -2352,3 +2352,42 @@ def task_export_api(request, task_id):
             'msg': f'不支持的格式: {format_type}。支持: json, csv, xlsx, md, txt, html, xml, sql, rss',
             'data': None
         }, status=400)
+        
+        
+# ==================== 任务关联模板 ====================
+
+@api_view(['POST'])
+@token_required
+def link_task_template(request, task_id):
+    """
+    为已有任务关联模板
+    POST /api/tasks/<task_id>/link-template/
+    Body: { "template_id": 123 }
+    """
+    try:
+        task = CrawlTask.objects.get(task_id=task_id)
+    except CrawlTask.DoesNotExist:
+        return Response({'code': 404, 'msg': '任务不存在', 'data': None}, status=404)
+    
+    template_id = request.data.get('template_id')
+    if not template_id:
+        return Response({'code': 400, 'msg': 'template_id 不能为空', 'data': None}, status=400)
+    
+    try:
+        template = Template.objects.get(pk=template_id)
+    except Template.DoesNotExist:
+        return Response({'code': 404, 'msg': '模板不存在', 'data': None}, status=404)
+    
+    # 关联模板
+    task.template = template
+    task.save()
+    
+    return Response({
+        'code': 200,
+        'msg': '关联模板成功',
+        'data': {
+            'task_id': str(task.task_id),
+            'template_id': template.id,
+            'template_name': template.name
+        }
+    })
