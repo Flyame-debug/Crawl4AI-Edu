@@ -1,13 +1,13 @@
 <template>
   <div class="home-view">
     <!-- 欢迎语区块 -->
-    <section class="welcome-section">
+    <section class="welcome-section" ref="welcomeSection">
       <h2>欢迎您，{{ username }}，今天想要做些什么？</h2>
       <p v-if="isGuest" class="guest-tip" @click="goLogin">登录后体验完整内容</p>
     </section>
 
     <!-- 功能展示区块 -->
-    <section class="feature-section">
+    <section class="feature-section" ref="featureSection">
       <transition-group name="fade" tag="div" class="feature-cards">
         <div class="card" v-for="item in featureCards" :key="item.title">
           <div class="card-content">
@@ -21,7 +21,7 @@
     </section>
 
     <!-- 系统入口区块 -->
-    <section class="entry-section">
+    <section class="entry-section" ref="entrySection">
       <transition-group name="fade" tag="div" class="entry-cards">
         <div class="entry-card" v-for="item in entryCards" :key="item.title" @click="handleEntry(item)">
           <div class="entry-content">
@@ -39,6 +39,20 @@
     <footer class="quick-start" @click="goGuide">
       快速开始？
     </footer>
+
+    <!-- 产品效果展示（放在最下面） -->
+    <section class="showcase-section" ref="showcaseSection">
+      <h2 class="showcase-title">产品效果展示</h2>
+      <div class="showcase-card">
+        <img 
+          src="/show.png" 
+          alt="产品效果展示" 
+          class="showcase-image"
+          @error="handleImageError"
+        />
+        <p class="showcase-hint">系统运行截图，展示数据采集与可视化效果</p>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -63,31 +77,31 @@ export default {
         { title: '任务列表', icon: List, desc: '查看和管理采集任务', route: '/tasks' }
       ],
       animatedNumbers: {},
-      animationFrames: [] // 存储所有动画帧ID，用于销毁时取消
+      animationFrames: [],
+      observer: null,
     }
   },
   mounted() {
     this.username = localStorage.getItem('username') || '游客'
     this.isGuest = !localStorage.getItem('token')
 
-    // 启动数字动画
     this.featureCards.forEach(card => {
       if (card.number !== null) {
         this.animateNumber(card.title, card.number)
       }
     })
+
+    this.initScrollAnimation()
   },
   beforeUnmount() {
-    // 取消所有未完成的动画帧，防止内存泄漏
     this.animationFrames.forEach(id => cancelAnimationFrame(id))
+    if (this.observer) {
+      this.observer.disconnect()
+    }
   },
   methods: {
-    goLogin() {
-      this.$router.push('/auth')
-    },
-    goGuide() {
-      this.$router.push('/guide')
-    },
+    goLogin() { this.$router.push('/auth') },
+    goGuide() { this.$router.push('/guide') },
     handleEntry(item) {
       if (this.isGuest) {
         ElMessageBox.confirm('请先登录！', '提示', {
@@ -115,7 +129,39 @@ export default {
         }
       }
       update()
-    }
+    },
+    handleImageError() {
+      console.warn('产品展示图片加载失败，请检查 public/show.png 是否存在')
+    },
+    initScrollAnimation() {
+      const sections = [
+        this.$refs.welcomeSection,
+        this.$refs.featureSection,
+        this.$refs.entrySection,
+        this.$refs.showcaseSection,
+      ].filter(Boolean)
+
+      this.observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            // 进入视口添加 visible 类，离开则移除，这样每次进入都有动画
+            if (entry.isIntersecting) {
+              entry.target.classList.add('visible')
+            } else {
+              entry.target.classList.remove('visible')
+            }
+          })
+        },
+        {
+          threshold: 0.1,
+          rootMargin: '0px 0px -50px 0px',
+        }
+      )
+
+      sections.forEach((section) => {
+        this.observer.observe(section)
+      })
+    },
   }
 }
 </script>
@@ -123,6 +169,27 @@ export default {
 <style scoped>
 .home-view {
   padding: 50px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* 初始状态隐藏，向下偏移 */
+.welcome-section,
+.feature-section,
+.entry-section,
+.showcase-section {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+/* 可见状态 */
+.welcome-section.visible,
+.feature-section.visible,
+.entry-section.visible,
+.showcase-section.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .welcome-section {
@@ -230,6 +297,42 @@ export default {
   color: #666;
 }
 
+/* 产品效果展示 */
+.showcase-section {
+  margin: 70px 0;
+  text-align: center;
+}
+.showcase-title {
+  font-size: 22px;
+  color: #333;
+  margin-bottom: 30px;
+  font-weight: 600;
+}
+.showcase-card {
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  overflow: hidden;
+  background: #fff;
+  padding: 20px;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.showcase-card:hover {
+  box-shadow: 0 8px 24px rgba(64,158,255,0.12);
+}
+.showcase-image {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 12px;
+  border: 1px solid #eee;
+  display: block;
+}
+.showcase-hint {
+  font-size: 14px;
+  color: #909399;
+  margin-top: 12px;
+  text-align: center;
+}
+
 .quick-start {
   text-align: right;
   font-size: 15px;
@@ -238,7 +341,7 @@ export default {
   margin-top: 30px;
 }
 
-/* 淡入动画 */
+/* 卡片列表淡入动画 */
 .fade-enter-active, .fade-leave-active {
   transition: all 0.8s ease;
 }
